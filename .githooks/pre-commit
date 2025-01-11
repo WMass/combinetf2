@@ -1,0 +1,89 @@
+#!/bin/bash
+# This pre-commit hook fixes whitespace issues and formats Python files
+
+# Exit if any command fails
+set -e
+
+# Trap the EXIT signal to print the last executed command when the script exits
+trap 'echo "Error on line $LINENO: $BASH_COMMAND" >&2' ERR
+
+# Find all staged Python files
+STAGED_FILES_PY=$(git diff --cached --name-only --diff-filter=d | grep -E '\.py$' || true)
+
+# Check for syntax errors in each staged Python file
+for FILE in $STAGED_FILES_PY; do
+  # Use python's compile command to check for syntax errors
+  python -m py_compile "$FILE"
+
+  # Check the exit status of the previous command
+  if [ $? -ne 0 ]; then
+    echo "Syntax error in $FILE. Commit aborted."
+    exit 1
+  fi
+done
+
+
+# apply style modifications on staged files
+unset MODIFIED_FILES
+
+# Loop through each staged c/c++ files and fix style issues
+for FILE in $STAGED_FILES_CPP; do
+  # apply LLVM style
+  clang-format -i "$FILE"
+
+  # Check if the file was modified compared to the staged version
+  if ! git diff --quiet "$FILE"; then
+    # Track the modified files
+    MODIFIED_FILES+=("$FILE")
+  fi
+
+done
+
+
+# Loop through each staged Python file and fix style issues
+for FILE in $STAGED_FILES_PY; do
+
+  # Remove unused imports
+  autoflake --in-place --expand-star-imports --remove-all-unused-imports "$FILE"
+
+  # Run isort to organize imports
+  isort "$FILE" --profile black --line-length 88
+
+  # PEP 8 formatting
+  black "$FILE"
+
+  # Check if the file was modified compared to the staged version
+  if ! git diff --quiet "$FILE"; then
+    # Track the modified files
+    MODIFIED_FILES+=("$FILE")
+  fi
+
+  flake8 $FILE --select=F401,F402,F403,F404,F405,F406,F407,F601,F602,F621,F622,F631,F632,F633,F634,F701,F702,F704,F706,F707,F721,F722,F723,F821,F822,F823,F831,F901 --max-line-length 88
+
+done
+
+
+# Check the exit status of flake8
+if [ $? -ne 0 ]; then
+  echo "flake8 found issues. Commit aborted."
+  exit 1  # Abort the commit
+fi
+
+
+if [ -n "$STAGED_FILES_PY" ]; then
+  # give a code rating of python files
+  pylint $STAGED_FILES_PY | grep 'Your code has been rated at'
+fi
+
+
+# Notify the user if any files were modified
+if [ ${#MODIFIED_FILES[@]} -gt 0 ]; then
+  echo "The following files were modified and need to be re-staged:"
+  for FILE in "${MODIFIED_FILES[@]}"; do
+    echo "  $FILE"
+  done
+  echo "Please review the changes and manually add the modified files to the staging area."
+  exit 1
+fi
+
+exit 0
