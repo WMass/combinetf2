@@ -1,0 +1,287 @@
+# This is a basic workflow to help you get started with Actions
+
+name: CI
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the master branch
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '30 3 * * 1,3,5' # Run on Monday, Wednesday, and Friday night at 3h30 UTC
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env: 
+  LOCAL_WEB_DIR: www/CombineTF2/PRValidation
+  EOS_DIR: /eos/user/c/cmsmwbot
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+
+  linting:
+    # The type of runner that the job will run on
+    runs-on: [self-hosted, linux, x64]
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v4
+
+      - name: run isort
+        run: |
+          isort . --check-only --diff --profile black --line-length 88
+
+      - name: run Flake8
+        run: >-
+          flake8 . --max-line-length 88
+          --select=F401,F402,F403,F404,F405,F406,F407,F601,F602,F621,F622,F631,F632,F633,F634,F701,F702,F704,F706,F707,F721,F722,F723,F821,F822,F823,F831,F901
+
+      - name: run Black
+        run: |
+          black --exclude '(^\.git|\.github)' --check .
+
+      - name: check Python Files
+        run: |
+          # Find all Python files and check their syntax in parallel
+          find . -name '*.py' | \
+          xargs -P 16 -I {} bash -c '
+            echo "Checking python file: {}"
+            python -m py_compile "{}" || \
+            { echo "Invalid python syntax in {}"; exit 1; }
+          '
+
+  setenv:
+    runs-on: [self-hosted, linux, x64]
+    needs: linting
+
+    outputs:
+      COMBINETF2_OUTDIR: ${{steps.export.outputs.COMBINETF2_OUTDIR}}
+      WEB_DIR: ${{steps.export.outputs.WEB_DIR}}
+      PLOT_DIR: ${{steps.export.outputs.PLOT_DIR}}
+      PYTHONPATH: ${{steps.export.outputs.PYTHONPATH}}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup kerberos
+        run: |
+          kinit -kt ~/private/.keytab cmsmwbot@CERN.CH
+          klist -k -t -e ~/private/.keytab
+          klist
+          echo "xrdfs root://eosuser.cern.ch// ls $EOS_DIR"
+          xrdfs root://eosuser.cern.ch// ls $EOS_DIR
+
+      - name: setup unscheduled
+        if: github.event_name != 'schedule'
+        run: echo PLOT_DIR=PR$(echo $GITHUB_REF | awk 'BEGIN { FS = "/" } ; { print $3 }')/$(date +%Y_%m_%d) >> $GITHUB_ENV
+
+      - name: setup reference run
+        if: github.event_name == 'schedule'
+        run: |
+          echo PLOT_DIR=ReferenceRuns/$(date +%Y_%m_%d)_$(git rev-parse --short "$GITHUB_SHA") >> $GITHUB_ENV
+
+      - name: setup outdir
+        run: echo "COMBINETF2_OUTDIR=/tmp/${USER}/$(uuidgen)" >> $GITHUB_ENV
+
+      - name: setup python path
+        run: echo "PYTHONPATH=$GITHUB_WORKSPACE:$PYTHONPATH" >> $GITHUB_ENV
+
+      - name: setup webdir
+        run: echo "WEB_DIR=$COMBINETF2_OUTDIR/$LOCAL_WEB_DIR" >> $GITHUB_ENV
+
+      - name: create plot dir
+        run: mkdir -p $WEB_DIR/$PLOT_DIR
+
+      - id: export
+        run: |
+          echo "COMBINETF2_OUTDIR=$COMBINETF2_OUTDIR" >> $GITHUB_OUTPUT
+          echo "WEB_DIR=$WEB_DIR" >> $GITHUB_OUTPUT
+          echo "PLOT_DIR=$PLOT_DIR" >> $GITHUB_OUTPUT
+          echo "PYTHONPATH=$PYTHONPATH" >> $GITHUB_OUTPUT
+
+  make-tensor:
+    runs-on: [self-hosted, linux, x64]
+    needs: setenv
+
+    steps:
+      - env:
+          COMBINETF2_OUTDIR: ${{ needs.setenv.outputs.COMBINETF2_OUTDIR }}
+          PYTHONPATH: ${{ needs.setenv.outputs.PYTHONPATH }}
+        run: |
+          echo "COMBINETF2_OUTDIR=${COMBINETF2_OUTDIR}" >> $GITHUB_ENV
+          echo "PYTHONPATH=${PYTHONPATH}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+
+      - name: make tensor
+        run: >-
+          python tests/make_tensor.py -o $COMBINETF2_OUTDIR/
+
+      - name: make sparse tensor
+        run: >-
+          python tests/make_tensor.py -o $COMBINETF2_OUTDIR/ --sparse --postfix sparse
+
+
+  fitting:
+    runs-on: [self-hosted, linux, x64]
+    needs: [setenv, make-tensor]
+
+    steps:
+      - env:
+          COMBINETF2_OUTDIR: ${{ needs.setenv.outputs.COMBINETF2_OUTDIR }}
+          PYTHONPATH: ${{ needs.setenv.outputs.PYTHONPATH }}
+        run: |
+          echo "COMBINETF2_OUTDIR=${COMBINETF2_OUTDIR}" >> $GITHUB_ENV
+          echo "PYTHONPATH=${PYTHONPATH}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+
+      - name: nominal fit
+        run: >- 
+          python scripts/fit.py 
+          $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/
+          -t 0 --binByBinStat --doImpacts --globalImpacts --project ch1 a --project ch1 b
+          --saveHists --saveHistsPerProcess --computeHistErrors --computeHistCov --computeHistImpacts --computeVariations
+
+      - name: sparse tensor fit 
+        run: >- 
+          python scripts/fit.py 
+          $COMBINETF2_OUTDIR/test_tensor_sparse.hdf5 -o $COMBINETF2_OUTDIR/ --postfix sparse
+          -t -0 --binByBinStat --doImpacts --globalImpacts --computeVariations
+          --saveHists --saveHistsPerProcess --computeHistErrors --project ch1 a --project ch1 b 
+
+      - name: pseudodata fit
+        run: >- 
+          python scripts/fit.py 
+          $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/ --postfix pseudodata
+          -t 0 --pseudoData original --binByBinStat --doImpacts --globalImpacts
+
+      - name: chi2 fit
+        run: >- 
+          python scripts/fit.py 
+          $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/ --postfix chi2
+          -t -0 --chisqFit --externalCovariance --doImpacts --globalImpacts 
+          --saveHists --saveHistsPerProcess --computeHistErrors --project ch1 a --project ch1 b 
+
+
+  plotting:
+    runs-on: [self-hosted, linux, x64]
+    needs: [setenv, fitting]
+
+    steps:
+      - env:
+          COMBINETF2_OUTDIR: ${{ needs.setenv.outputs.COMBINETF2_OUTDIR }}
+          PYTHONPATH: ${{ needs.setenv.outputs.PYTHONPATH }}
+          WEB_DIR: ${{ needs.setenv.outputs.WEB_DIR }}
+          PLOT_DIR: ${{ needs.setenv.outputs.PLOT_DIR }}
+        run: |
+          echo "COMBINETF2_OUTDIR=${COMBINETF2_OUTDIR}" >> $GITHUB_ENV
+          echo "PYTHONPATH=${PYTHONPATH}" >> $GITHUB_ENV
+          echo "WEB_DIR=${WEB_DIR}" >> $GITHUB_ENV
+          echo "PLOT_DIR=${PLOT_DIR}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+
+      - name: print pulls & constraints
+        run: python scripts/printPullsAndConstraints.py $COMBINETF2_OUTDIR/fitresults.hdf5 
+
+      - name: print impacts
+        run: python scripts/printImpacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 -s
+
+      - name: print global impacts
+        run: python scripts/printImpacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 -s --globalImpacts
+
+      - name: plot impacts
+        run: >-
+          python scripts/plot_pullsAndImpacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR
+          --otherExtensions pdf png -n 50 --config tests/style_config.py -s absimpact --subtitle Preliminary --grouping max
+
+      - name: plot global impacts
+        run: >-
+          python scripts/plot_pullsAndImpacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR
+          -r $COMBINETF2_OUTDIR/fitresults_pseudodata.hdf5 --refName "Pseudo data" -s absimpact
+          --otherExtensions pdf png -n 50  --config tests/style_config.py --oneSidedImpacts --globalImpacts --diffPullAsym --showNumbers
+          --grouping max --subtitle Preliminary --postfix data_vs_pseudodata
+
+      - name: plot prefit distributions
+        run: >-
+          python scripts/plot_hists.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --extraTextLoc '0.05' '0.7' --legCols 1 --project ch1 a --project ch1 b --yscale '1.2' 
+          --subtitle Preliminary --prefit --config tests/style_config.py
+
+      - name: plot postfit distributions
+        run: >-
+          python scripts/plot_hists.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --extraTextLoc '0.05' '0.7' --legCols 1 --project ch1 a --project ch1 b --yscale '1.2' 
+          --subtitle Preliminary --varNames 'slope_signal' --varColors orange --config tests/style_config.py --rrange 0.8 1.2
+
+      - name: plot histogram covariance matrices
+        run: >-
+          python scripts/plot_hists_cov.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --subtitle Preliminary --project ch1 a --project ch1 b --subtitle Preliminary --config tests/style_config.py
+
+      - name: plot histogram impacts
+        run: >-
+          python scripts/plot_hists_uncertainties.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --extraTextLoc '0.05' '0.7' --legCols 1 --project ch1 a --project ch1 b --yscale '1.2' --subtitle Preliminary --config tests/style_config.py
+
+  likelihoodscans:
+    runs-on: [self-hosted, linux, x64]
+    needs: [setenv, make-tensor]
+
+    steps:
+      - env:
+          COMBINETF2_OUTDIR: ${{ needs.setenv.outputs.COMBINETF2_OUTDIR }}
+          PYTHONPATH: ${{ needs.setenv.outputs.PYTHONPATH }}
+          WEB_DIR: ${{ needs.setenv.outputs.WEB_DIR }}
+          PLOT_DIR: ${{ needs.setenv.outputs.PLOT_DIR }}
+        run: |
+          echo "COMBINETF2_OUTDIR=${COMBINETF2_OUTDIR}" >> $GITHUB_ENV
+          echo "PYTHONPATH=${PYTHONPATH}" >> $GITHUB_ENV
+          echo "WEB_DIR=${WEB_DIR}" >> $GITHUB_ENV
+          echo "PLOT_DIR=${PLOT_DIR}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+
+      - name: nominal fit with scans
+        run: >- 
+          python scripts/fit.py 
+          $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/ --postfix scans
+          -t 0 --doImpacts 
+          --scan sig slope_signal --contourScan sig slope_signal --contourLevels 1 2
+          --scan2D sig slope_signal
+
+      #  --contourScan2D sig slope_signal
+
+      - name: plot 1D likelihood scan
+        run: >-
+          python scripts/plot_likelihood_scan.py $COMBINETF2_OUTDIR/fitresults_scans.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --title CombineTF2 --subtitle Preliminary --params sig slope_signal
+
+      - name: plot 2D likelihood scan
+        run: >-
+          python scripts/plot_likelihood_scan2D.py $COMBINETF2_OUTDIR/fitresults_scans.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --title CombineTF2 --subtitle Preliminary --params sig slope_signal
+
+  copy-clean:
+    runs-on: [self-hosted, linux, x64]
+    needs: [setenv, plotting, likelihoodscans]
+    if: always() 
+    steps:
+      - env:
+          COMBINETF2_OUTDIR: ${{ needs.setenv.outputs.COMBINETF2_OUTDIR }}
+        run: |
+          echo "COMBINETF2_OUTDIR=${COMBINETF2_OUTDIR}" >> $GITHUB_ENV
+
+      - name: copy clean plots
+        run: |
+          echo "xrdcp --parallel 4 -R -f $COMBINETF2_OUTDIR/$LOCAL_WEB_DIR/* root://eosuser.cern.ch//$EOS_DIR/$LOCAL_WEB_DIR"
+          xrdcp --parallel 4 -R -f $COMBINETF2_OUTDIR/$LOCAL_WEB_DIR/* root://eosuser.cern.ch//$EOS_DIR/$LOCAL_WEB_DIR
+          echo "Removing temp directory $COMBINETF2_OUTDIR/$LOCAL_WEB_DIR"
+          rm -r $COMBINETF2_OUTDIR/$LOCAL_WEB_DIR
+
+      - name: clean
+        run: |
+          echo "Removing temp directory $COMBINETF2_OUTDIR"
+          rm -r $COMBINETF2_OUTDIR
