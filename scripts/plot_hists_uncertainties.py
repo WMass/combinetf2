@@ -583,18 +583,17 @@ def main():
             **opts,
         )
 
-    if len(args.project) == 0:
-        for channel, info in channel_info.items():
-            result = fitresult[f"channels"][channel]
+    for channel, info in channel_info.items():
+        result = fitresult[f"channels"][channel]
 
-            make_plots(
-                outdir,
-                result,
-                axes=info["axes"],
-                channel=channel,
-                lumi=info.get("lumi", None),
-                **opts,
-            )
+        make_plots(
+            outdir,
+            result,
+            axes=info["axes"],
+            channel=channel,
+            lumi=info.get("lumi", None),
+            **opts,
+        )
 
     if output_tools.is_eosuser_path(args.outpath) and args.eoscp:
         output_tools.copy_to_eos(outdir, args.outpath, args.outfolder)

@@ -36,6 +36,7 @@ plotting = ["matplotlib","mplhep", "seaborn", "pandas", "plotly", "kaleido"]
 
 [project.scripts]
 combinetf2 = "scripts.fit:main"
+combinetf2-plot-inputdata = "scripts.plot_inputdata:main"
 combinetf2-plot-hists = "scripts.plot_hists:main"
 combinetf2-plot-cov = "scripts.plot_hists_cov:main"
 combinetf2-plot-uncertainties = "scripts.plot_hists_uncertainties:main"

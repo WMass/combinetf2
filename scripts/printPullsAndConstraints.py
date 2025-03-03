@@ -99,6 +99,7 @@ def main():
         if args.asym:
             constraints_asym = constraints_asym[order]
 
+    nround = 5
     if args.asym:
         print(
             f"   {'Parameter':<30} {'pull':>6} +/- {'constraint':>10} + {'up':>10} - {'down':>10} ({'pull prefit':>11} +/- {'constraint prefit':>17})"
@@ -107,7 +108,7 @@ def main():
         print(
             "\n".join(
                 [
-                    f"   {l:<30} {round(p, 2):>6} +/- {round(c, 2):>10} + {round(c_asym[0], 2):>10} - {round(c_asym[1], 2):>10} ({round(pp, 2):>11} +/- {round(pc, 2):>17})"
+                    f"   {l:<30} {round(p, nround):>6} +/- {round(c, nround):>10} + {round(c_asym[0], nround):>10} - {round(c_asym[1], nround):>10} ({round(pp, nround):>11} +/- {round(pc, nround):>17})"
                     for l, p, c, c_asym, pp, pc in zip(
                         labels,
                         pulls,
@@ -127,7 +128,7 @@ def main():
         print(
             "\n".join(
                 [
-                    f"   {l:<30} {round(p, 2):>6} +/- {round(c, 2):>10} ({round(pp, 2):>11} +/- {round(pc, 2):>17})"
+                    f"   {l:<30} {round(p, nround):>6} +/- {round(c, nround):>10} ({round(pp, nround):>11} +/- {round(pc, nround):>17})"
                     for l, p, c, pp, pc in zip(
                         labels, pulls, constraints, pulls_prefit, constraints_prefit
                     )

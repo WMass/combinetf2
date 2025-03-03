@@ -169,7 +169,14 @@ def make_parser():
     parser.add_argument(
         "--externalPostfit",
         default=None,
-        help="load posfit nuisance parameters and covariance from result of an external fit",
+        type=str,
+        help="load posfit nuisance parameters and covariance from result of an external fit.",
+    )
+    parser.add_argument(
+        "--externalPostfitResult",
+        default=None,
+        type=str,
+        help="Specify result from external postfit file",
     )
     parser.add_argument(
         "--pseudoData",
@@ -368,7 +375,7 @@ def fit(args, fitter, ws, dofit=True):
                 cov_ext = fext["cov"][...]
             else:
                 # fitresult from combinetf2
-                h5results_ext = io_tools.get_fitresult(fext)
+                h5results_ext = io_tools.get_fitresult(fext, args.externalPostfitResult)
                 h_parms_ext = h5results_ext["parms"].get()
 
                 x_ext = h_parms_ext.values()

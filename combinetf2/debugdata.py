@@ -27,7 +27,10 @@ class FitDebugData:
             stop = ibin + np.prod(shape)
 
             shape_norm = [*shape, self.indata.nproc]
-            shape_logk = [*shape, self.indata.nproc, 2, self.indata.nsyst]
+            if self.indata.symmetric_tensor:
+                shape_logk = [*shape, self.indata.nproc, self.indata.nsyst]
+            else:
+                shape_logk = [*shape, self.indata.nproc, 2, self.indata.nsyst]
 
             data_obs_hist = hist.Hist(*axes, name=f"{channel}_data_obs")
             data_obs_hist.values()[...] = memoryview(
@@ -44,28 +47,32 @@ class FitDebugData:
             logk_array = np.asarray(
                 memoryview(tf.reshape(self.indata.logk[ibin:stop, :], shape_logk))
             )
-            logkavg = logk_array[..., 0, :]
-            logkhalfdiff = logk_array[..., 1, :]
+            if self.indata.symmetric_tensor:
+                logkavg = logk_array[..., :]
+                syst_down = np.exp(-logkavg) * nominal_hist.values()[..., None]
+                syst_up = np.exp(logkavg) * nominal_hist.values()[..., None]
+                nonzero = np.abs(logkavg) > 0.0
+            else:
+                logkavg = logk_array[..., 0, :]
+                logkhalfdiff = logk_array[..., 1, :]
+                syst_down = (
+                    np.exp(-logkavg + logkhalfdiff) * nominal_hist.values()[..., None]
+                )
+                syst_up = (
+                    np.exp(logkavg + logkhalfdiff) * nominal_hist.values()[..., None]
+                )
+                nonzero = np.logical_or(
+                    np.abs(logkavg) > 0.0, np.abs(logkhalfdiff) > 0.0
+                )
 
             syst_hist = hist.Hist(
                 *axes,
                 self.axis_procs,
                 self.axis_systs,
                 self.axis_downup,
+                data=np.stack((syst_down, syst_up), axis=-1),
                 name=f"{channel}_syst",
             )
-
-            logkdown = logkavg - logkhalfdiff
-            syst_hist[{"DownUp": "Down"}] = (
-                np.exp(-logkdown) * nominal_hist.values()[..., None]
-            )
-            del logkdown
-
-            logkup = logkavg + logkhalfdiff
-            syst_hist[{"DownUp": "Up"}] = (
-                np.exp(logkup) * nominal_hist.values()[..., None]
-            )
-            del logkup
 
             syst_active_hist = hist.Hist(
                 self.axis_procs,
@@ -74,8 +81,7 @@ class FitDebugData:
                 storage=hist.storage.Int64(),
             )
             syst_active_hist.values()[...] = np.sum(
-                np.logical_or(np.abs(logkavg) > 0.0, np.abs(logkhalfdiff) > 0.0),
-                axis=tuple(range(len(axes))),
+                nonzero, axis=tuple(range(len(axes)))
             )
 
             self.data_obs_hists[channel] = data_obs_hist

@@ -108,9 +108,13 @@ jobs:
       - env:
           COMBINETF2_OUTDIR: ${{ needs.setenv.outputs.COMBINETF2_OUTDIR }}
           PYTHONPATH: ${{ needs.setenv.outputs.PYTHONPATH }}
+          WEB_DIR: ${{ needs.setenv.outputs.WEB_DIR }}
+          PLOT_DIR: ${{ needs.setenv.outputs.PLOT_DIR }}
         run: |
           echo "COMBINETF2_OUTDIR=${COMBINETF2_OUTDIR}" >> $GITHUB_ENV
           echo "PYTHONPATH=${PYTHONPATH}" >> $GITHUB_ENV
+          echo "WEB_DIR=${WEB_DIR}" >> $GITHUB_ENV
+          echo "PLOT_DIR=${PLOT_DIR}" >> $GITHUB_ENV
 
       - uses: actions/checkout@v4
 
@@ -118,10 +122,23 @@ jobs:
         run: >-
           python tests/make_tensor.py -o $COMBINETF2_OUTDIR/
 
+      - name: make symmetric tensor
+        run: >-
+          python tests/make_tensor.py -o $COMBINETF2_OUTDIR/ --symmetrizeAll --postfix symmetric 
+
       - name: make sparse tensor
         run: >-
           python tests/make_tensor.py -o $COMBINETF2_OUTDIR/ --sparse --postfix sparse
 
+      - name: plot input
+        run: >-
+          python scripts/plot_inputdata.py $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --varName slope_2_signal_ch1 --varLabel "Slope signal, 2 (ch1)" --varColor cyan
+
+      - name: plot symmetric input
+        run: >-
+          python scripts/plot_inputdata.py $COMBINETF2_OUTDIR/test_tensor_symmetric.hdf5 -o $WEB_DIR/$PLOT_DIR --postfix symmetric
+          --varName slope_2_signal_ch1SymAvg slope_2_signal_ch1SymDiff --varLabel "Slope signal, 2 (ch1) [Avg.]" "Slope signal, 2 (ch1) [Diff.]" --varColor cyan magenta
 
   fitting:
     runs-on: [self-hosted, linux, x64]

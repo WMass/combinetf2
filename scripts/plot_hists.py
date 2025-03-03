@@ -1131,21 +1131,20 @@ def main():
             **opts,
         )
 
-    if len(args.project) == 0:
-        for channel, info in channel_info.items():
-            result = fitresult[f"channels"][channel]
-            chi2, ndf, saturated_chi2 = get_chi2(fitresult, args.noChisq, fittype)
+    for channel, info in channel_info.items():
+        result = fitresult[f"channels"][channel]
+        chi2, ndf, saturated_chi2 = get_chi2(fitresult, args.noChisq, fittype)
 
-            make_plots(
-                result,
-                info["axes"],
-                outdir,
-                channel=channel,
-                chi2=[chi2, ndf],
-                saturated_chi2=saturated_chi2,
-                lumi=info.get("lumi", None),
-                **opts,
-            )
+        make_plots(
+            result,
+            info["axes"],
+            outdir,
+            channel=channel,
+            chi2=[chi2, ndf],
+            saturated_chi2=saturated_chi2,
+            lumi=info.get("lumi", None),
+            **opts,
+        )
 
     if output_tools.is_eosuser_path(args.outpath) and args.eoscp:
         output_tools.copy_to_eos(outdir, args.outpath, args.outfolder)
