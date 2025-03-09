@@ -17,7 +17,7 @@ def make_parser():
 
     parser.add_argument("filename", help="filename of the main hdf5 input")
     parser.add_argument("-o", "--output", default="./", help="output directory")
-    parser.add_argument("--outname", default="fitresults", help="output file name")
+    parser.add_argument("--outname", default="fitresults.hdf5", help="output file name")
     parser.add_argument(
         "--postfix",
         default=None,
@@ -232,6 +232,7 @@ def save_hists(args, fitter, ws, prefit=True):
     exp, aux = fitter.expected_events(
         inclusive=True,
         compute_variance=args.computeHistErrors,
+        compute_cov=args.computeHistCov,
         compute_chi2=not args.noChi2,
         compute_global_impacts=args.computeHistImpacts and not prefit,
     )
@@ -274,6 +275,7 @@ def save_hists(args, fitter, ws, prefit=True):
             axes=axes,
             inclusive=True,
             compute_variance=args.computeHistErrors,
+            compute_cov=args.computeHistCov,
             compute_chi2=not args.noChi2,
             compute_global_impacts=args.computeHistImpacts and not prefit,
         )

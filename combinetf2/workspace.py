@@ -109,7 +109,7 @@ class Workspace:
             if not os.path.exists(outfolder):
                 os.makedirs(outfolder)
 
-        if "." not in file_path and file_path.split(".")[-1]:
+        if "." not in outname:
             file_path += f".{self.extension}"
 
         if postfix is not None:

@@ -747,7 +747,7 @@ class Fitter:
             exp, expvar, expcov, exp_impacts, exp_impacts_grouped = (
                 self.expected_with_variance(
                     fun,
-                    compute_cov=compute_variance,
+                    compute_cov=compute_cov,
                     compute_global_impacts=compute_global_impacts,
                 )
             )
