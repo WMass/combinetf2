@@ -99,7 +99,11 @@ class Workspace:
             if len(projections):
                 self.results["channels"][c]["projections"] = {}
                 for a in projections:
-                    self.results["channels"][c]["projections"]["_".join(a)] = {}
+                    if len(a) == 0:
+                        key = "yield"
+                    else:
+                        key = "_".join(a)
+                    self.results["channels"][c]["projections"][key] = {}
 
     def get_file_path(self, outdir, outname, postfix=None):
         # create output file name
@@ -109,7 +113,7 @@ class Workspace:
             if not os.path.exists(outfolder):
                 os.makedirs(outfolder)
 
-        if "." not in file_path and file_path.split(".")[-1]:
+        if "." not in outname:
             file_path += f".{self.extension}"
 
         if postfix is not None:
@@ -185,8 +189,34 @@ class Workspace:
             )
 
             for axes in self.projections.get(channel, []):
-                self.dump_hist(h_data_obs.project(*axes), channel, axes)
-                self.dump_hist(h_nobs.project(*axes), channel, axes)
+                if len(axes) == 0:
+                    axes = ["yield"]
+                    h_data_proj = self.hist(
+                        "hist_data_obs",
+                        [
+                            hist.axis.Integer(
+                                0, 1, name="yield", overflow=False, underflow=False
+                            )
+                        ],
+                        values=np.sum(data_obs[start:stop]),
+                        label="observed number of events in data",
+                    )
+                    h_nobs_proj = self.hist(
+                        "hist_nobs",
+                        [
+                            hist.axis.Integer(
+                                0, 1, name="yield", overflow=False, underflow=False
+                            )
+                        ],
+                        values=np.sum(nobs[start:stop]),
+                        label="observed number of events for fit",
+                    )
+                else:
+                    h_data_proj = h_data_obs.project(*axes)
+                    h_nobs_proj = h_nobs.project(*axes)
+
+                self.dump_hist(h_data_proj, channel, axes)
+                self.dump_hist(h_nobs_proj, channel, axes)
 
             self.dump_hist(h_data_obs, channel)
             self.dump_hist(h_nobs, channel)
@@ -407,15 +437,19 @@ class Workspace:
         variations=False,
         prefit=False,
     ):
-
         name, label = get_name_label_expected_hists(
             name, label, prefit, variations, process_axis
         )
 
         hist_axes = [axis for axis in channel_axes if axis.name in axes_names]
-
         if len(hist_axes) != len(axes_names):
             raise ValueError("axis not found")
+
+        if len(hist_axes) == 0:
+            hist_axes = [
+                hist.axis.Integer(0, 1, name="yield", overflow=False, underflow=False)
+            ]
+            axes_names = ["yield"]
 
         if process_axis is not None:
             hist_axes.append(process_axis)
