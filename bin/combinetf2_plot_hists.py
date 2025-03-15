@@ -343,9 +343,9 @@ def make_plot(
     varColors=None,
     is_normalized=False,
 ):
-    ratio = not args.noLowerPanel and not args.logTransform
-    diff = not args.noLowerPanel and args.logTransform
-    data = not args.noData
+    ratio = not args.noLowerPanel and not args.logTransform and h_data is not None
+    diff = not args.noLowerPanel and args.logTransform and h_data is not None
+    data = not args.noData and h_data is not None
 
     axes_names = [a.name for a in axes]
 
@@ -386,6 +386,7 @@ def make_plot(
                     np.sum(h.project(*axes_names).variances()) ** 0.5,
                 )
                 for k, h in zip([args.dataName, "Inclusive"], [h_data, h_inclusive])
+                if h is not None
             ],
             columns=["Process", "Yield", "Uncertainty"],
         ),
@@ -398,14 +399,14 @@ def make_plot(
     #     histtype_data = "step"
     #     histtype_mc = "errorbar"
 
-    if len(h_data.axes) > 1:
+    if len(h_inclusive.axes) > 1:
         if args.invertAxes:
             logger.info("invert eta order")
             axes_names = axes_names[::-1]
             axes = axes[::-1]
 
         # make unrolled 1D histograms
-        if binwnorm is not None and not args.unfoldedXsec:
+        if h_data is not None and binwnorm is not None and not args.unfoldedXsec:
             # need hist with variances to handle bin width normaliztion
             h_data_tmp = hist.Hist(
                 *[a for a in h_data.axes], storage=hist.storage.Weight()
@@ -414,7 +415,9 @@ def make_plot(
             h_data_tmp.variances()[...] = h_data.values()
             h_data = h_data_tmp
 
-        h_data = hh.unrolledHist(h_data, binwnorm=binwnorm, obs=axes_names)
+        if h_data is not None:
+            h_data = hh.unrolledHist(h_data, binwnorm=binwnorm, obs=axes_names)
+
         h_inclusive = hh.unrolledHist(h_inclusive, binwnorm=binwnorm, obs=axes_names)
         h_stack = [
             hh.unrolledHist(h, binwnorm=binwnorm, obs=axes_names) for h in h_stack
@@ -430,7 +433,7 @@ def make_plot(
                 h_data_stat, binwnorm=binwnorm, obs=axes_names
             )
 
-    if args.normToData:
+    if args.normToData and h_data is not None:
         scale = h_data.values().sum() / h_inclusive.values().sum()
         h_stack = [hh.scaleHist(h, scale) for h in h_stack]
         h_inclusive = hh.scaleHist(h_inclusive, scale)
@@ -447,7 +450,7 @@ def make_plot(
             rlabel = f"${rlabel} Pred.$"
 
         fig, ax1, ratio_axes = plot_tools.figureWithRatio(
-            h_data,
+            h_inclusive,
             xlabel,
             ylabel,
             args.ylim,
@@ -464,7 +467,7 @@ def make_plot(
         )
         ax2 = ratio_axes[-1]
     else:
-        fig, ax1 = plot_tools.figure(h_data, xlabel, ylabel, args.ylim)
+        fig, ax1 = plot_tools.figure(h_inclusive, xlabel, ylabel, args.ylim)
 
     for (
         h,
@@ -753,7 +756,7 @@ def make_plot(
     if selection is not None:
         text_pieces.extend(selection)
 
-    if chi2[0] is not None:
+    if chi2[0] is not None and data:
         p_val = int(round(scipy.stats.chi2.sf(chi2[0], chi2[1]) * 100))
         if saturated_chi2:
             chi2_name = r"$\mathit{\chi}_{\mathrm{sat.}}^2/\mathit{ndf}$"
@@ -813,6 +816,8 @@ def make_plot(
             custom_handlers=["stacked"],
             padding_loc=args.lowerLegPadding,
         )
+    else:
+        ax2 = None
 
     plot_tools.fix_axes(ax1, ax2, fig, yscale=args.yscale, noSci=args.noSciy)
 
@@ -875,7 +880,10 @@ def make_plots(
         hist_inclusive = result[f"hist_prefit_inclusive"].get()
         hist_stack = []
     else:
-        hist_data = result["hist_data_obs"].get()
+        if "hist_data_obs" in result.keys():
+            hist_data = result["hist_data_obs"].get()
+        else:
+            hist_data = None
         hist_inclusive = result[f"hist_{fittype}_inclusive"].get()
         hist_stack = result[f"hist_{fittype}"].get()
         hist_stack = [hist_stack[{"processes": p}] for p in procs]
@@ -953,9 +961,14 @@ def make_plots(
                 for a, i in zip(selection_axes, bins)
             }
 
-            h_data = hist_data[idxs]
             h_inclusive = hist_inclusive[idxs]
             h_stack = [h[idxs] for h in hist_stack]
+
+            if hist_data is None:
+                h_data = hist_data[idxs]
+            else:
+                h_data = None
+
             if hist_data_stat is not None:
                 h_data_stat = hist_data_stat[idxs]
             else:

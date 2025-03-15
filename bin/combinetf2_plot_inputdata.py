@@ -586,7 +586,11 @@ def main():
             hists_syst_up = []
 
         # setup data histogram
-        if args.noData or args.splitByProcess:
+        if (
+            args.noData
+            or args.splitByProcess
+            or channel not in debug.data_obs_hists.keys()
+        ):
             hist_data = None
         else:
             hist_data_tmp = debug.data_obs_hists[channel]

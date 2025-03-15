@@ -32,10 +32,11 @@ class FitDebugData:
             else:
                 shape_logk = [*shape, self.indata.nproc, 2, self.indata.nsyst]
 
-            data_obs_hist = hist.Hist(*axes, name=f"{channel}_data_obs")
-            data_obs_hist.values()[...] = memoryview(
-                tf.reshape(self.indata.data_obs[ibin:stop], shape)
-            )
+            if not info["masked"]:
+                data_obs_hist = hist.Hist(*axes, name=f"{channel}_data_obs")
+                data_obs_hist.values()[...] = memoryview(
+                    tf.reshape(self.indata.data_obs[ibin:stop], shape)
+                )
 
             nominal_hist = hist.Hist(*axes, self.axis_procs, name=f"{channel}_nominal")
             nominal_hist.values()[...] = memoryview(
@@ -85,7 +86,8 @@ class FitDebugData:
                 nonzero, axis=tuple(range(len(axes)))
             )
 
-            self.data_obs_hists[channel] = data_obs_hist
+            if not info["masked"]:
+                self.data_obs_hists[channel] = data_obs_hist
             self.nominal_hists[channel] = nominal_hist
             self.syst_hists[channel] = syst_hist
             self.syst_active_hists[channel] = syst_active_hist

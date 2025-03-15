@@ -32,6 +32,13 @@ parser.add_argument(
     action="store_true",
     help="Store tensor with exponential transformation",
 )
+parser.add_argument(
+    "--skipMaskedChannels",
+    default=False,
+    action="store_true",
+    help="Skip adding masked channels",
+)
+
 
 args = parser.parse_args()
 
@@ -51,6 +58,9 @@ h2_bkg = hist.Hist(ax_a, ax_b, storage=hist.storage.Weight())
 
 h1_bkg_2 = hist.Hist(ax_x, storage=hist.storage.Weight())
 
+# masked channel e.g. for gen level distribution
+h1_sig_masked = hist.Hist(ax_x, storage=hist.storage.Weight())
+
 # for pseudodata
 h1_pseudo = hist.Hist(ax_x, storage=hist.storage.Weight())
 h2_pseudo = hist.Hist(ax_a, ax_b, storage=hist.storage.Weight())
@@ -68,6 +78,13 @@ def get_sig(factor=1):
     b = np.random.normal(10, 2.5, 15000 * factor)
     w_ab = np.random.normal(1 / factor, 0.2, 15000 * factor)
     return x, w_x, a, b, w_ab
+
+
+def get_sig_masked(factor=1):
+    # gaussian distributed signal
+    x = np.random.normal(0, 0.8, 10000 * factor)
+    w_x = np.random.normal(1 / factor, 0.1, 10000 * factor)
+    return x, w_x
 
 
 def get_bkg(factor=1):
@@ -109,6 +126,10 @@ h2_bkg.fill(a, b, weight=w_ab)
 
 x = get_bkg_2()
 h1_bkg_2.fill(x)
+
+if not args.skipMaskedChannels:
+    x, w_x = get_sig_masked(3)
+    h1_sig_masked.fill(x, weight=w_x)
 
 # pseudodata as exact composition of signal and background
 h1_pseudo.values()[...] = (
@@ -172,6 +193,10 @@ writer.add_process(h2_bkg, "bkg", "ch1")
 
 writer.add_process(h1_bkg_2, "bkg_2", "ch0")
 
+if not args.skipMaskedChannels:
+    # add masked channel
+    writer.add_process(h1_sig_masked, "sig", "ch0_masked", signal=True, masked=True)
+
 # systematic uncertainties
 
 writer.add_lnN_systematic("norm", ["sig", "bkg", "bkg_2"], "ch0", 1.02)
@@ -227,6 +252,22 @@ writer.add_systematic(
     constrained=False,
     noi=True,
 )
+
+if not args.skipMaskedChannels:
+    h1_sig_masked_syst1_up = h1_sig_masked.copy()
+    h1_sig_masked_syst1_dn = h1_sig_masked.copy()
+    h1_sig_masked_syst1_up.values()[...] = h1_sig_masked.values() * (1 + weights)
+    h1_sig_masked_syst1_dn.values()[...] = h1_sig_masked.values() * (1 - weights)
+
+    writer.add_systematic(
+        [h1_sig_masked_syst1_up, h1_sig_masked_syst1_dn],
+        "slope_signal",
+        "sig",
+        "ch0_masked",
+        symmetrize="average",
+        constrained=False,
+        noi=True,
+    )
 
 h1_sig_syst2_up = h1_sig.copy()
 h1_sig_syst2_dn = h1_sig.copy()

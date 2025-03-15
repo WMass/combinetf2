@@ -59,10 +59,11 @@ def printImpacts(args, fitresult, poi):
         labels = labels[order]
         impacts = impacts[order]
 
+    nround = 5
     if args.asymImpacts:
-        fimpact = lambda x: f"{round(max(x)*100, 2)} / {round(min(x)*100, 2)}"
+        fimpact = lambda x: f"{round(max(x)*100, nround)} / {round(min(x)*100, nround)}"
     else:
-        fimpact = lambda x: round(x * 100, 2)
+        fimpact = lambda x: round(x * 100, nround)
 
     if args.nuisance:
         if args.nuisance not in labels:

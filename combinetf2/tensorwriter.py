@@ -96,8 +96,8 @@ class TensorWriter:
             )
         self.dict_pseudodata[channel][name] = self.get_flat_values(h)
 
-    def add_process(self, h, name, channel="ch0", signal=False):
-        self._check_hist_and_channel(h, channel)
+    def add_process(self, h, name, channel="ch0", signal=False, masked=False):
+        self._check_hist_and_channel(h, channel, masked=masked)
 
         if name in self.dict_norm[channel].keys():
             raise RuntimeError(
@@ -116,42 +116,54 @@ class TensorWriter:
             self.dict_logkhalfdiff_indices[channel][name] = {}
 
         norm = self.get_flat_values(h)
-        sumw2 = self.get_flat_variances(h)
 
         if not self.allow_negative_expectation:
             norm = np.maximum(norm, 0.0)
-        if not np.all(np.isfinite(sumw2)):
-            raise RuntimeError(
-                f"{len(sumw2)-sum(np.isfinite(sumw2))} NaN or Inf values encountered in variances for {name}!"
-            )
+
         if not np.all(np.isfinite(norm)):
             raise RuntimeError(
                 f"{len(norm)-sum(np.isfinite(norm))} NaN or Inf values encountered in nominal histogram for {name}!"
             )
 
         self.dict_norm[channel][name] = norm
-        self.dict_sumw2[channel] += sumw2
 
-    def add_channel(self, axes, name=None):
+        if not masked:
+            sumw2 = self.get_flat_variances(h)
+
+            if not np.all(np.isfinite(sumw2)):
+                raise RuntimeError(
+                    f"{len(sumw2)-sum(np.isfinite(sumw2))} NaN or Inf values encountered in variances for {name}!"
+                )
+
+            self.dict_sumw2[channel] += sumw2
+
+    def add_channel(self, axes, name=None, masked=False):
         if name is None:
             name = f"ch{len(self.channels)}"
         print(f"Add new channel {name}")
-        self.channels[name] = {"axes": axes}
         ibins = np.prod([len(a) for a in axes])
         self.nbinschan[name] = ibins
         self.dict_norm[name] = {}
-        self.dict_sumw2[name] = np.zeros(ibins)
+
+        # add masked channels last and not masked channels first
+        this_channel = {"axes": axes, "masked": masked}
+        if masked:
+            self.channels[name] = this_channel
+        else:
+            self.dict_sumw2[name] = np.zeros(ibins)
+            self.channels = {name: this_channel, **self.channels}
+
         self.dict_logkavg[name] = {}
         self.dict_logkhalfdiff[name] = {}
         if self.sparse:
             self.dict_logkavg_indices[name] = {}
             self.dict_logkhalfdiff_indices[name] = {}
 
-    def _check_hist_and_channel(self, h, channel, add=True):
+    def _check_hist_and_channel(self, h, channel, add=True, masked=False):
         axes = [a for a in h.axes]
         if channel not in self.channels.keys():
             if add:
-                self.add_channel(axes, channel)
+                self.add_channel(axes, channel, masked=masked)
             else:
                 raise RuntimeError(f"Channel {channel} not known!")
         elif axes != self.channels[channel]["axes"]:
@@ -366,7 +378,9 @@ class TensorWriter:
         procs = sorted(list(self.signals)) + sorted(list(self.bkgs))
         nproc = len(procs)
 
-        nbins = sum([v for v in self.nbinschan.values()])
+        nbins = sum(
+            [v for c, v in self.nbinschan.items() if not self.channels[c]["masked"]]
+        )
 
         print(f"Write out nominal arrays")
         sumw = np.zeros([nbins], self.dtype)
@@ -374,7 +388,9 @@ class TensorWriter:
         data_obs = np.zeros([nbins], self.dtype)
         pseudodata = np.zeros([nbins, len(self.pseudodata_names)], self.dtype)
         ibin = 0
-        for chan in self.channels.keys():
+        for chan, chan_info in self.channels.items():
+            if chan_info["masked"]:
+                continue
             nbinschan = self.nbinschan[chan]
 
             data_obs[ibin : ibin + nbinschan] = self.dict_data_obs[chan]
@@ -392,6 +408,15 @@ class TensorWriter:
                 sumw[ibin : ibin + nbinschan] += self.dict_norm[chan][proc]
 
             ibin += nbinschan
+
+        # compute poisson parameter for Barlow-Beeston bin-by-bin statistical uncertainties
+        kstat = np.square(sumw) / sumw2
+        # numerical protection to avoid poorly defined constraint
+        kstat = np.where(np.equal(sumw, 0.0), 1.0, kstat)
+        kstat = np.where(np.equal(sumw2, 0.0), 1.0, kstat)
+
+        # nbins including masked channels
+        nbins = sum([v for v in self.nbinschan.values()])
 
         systs = self.get_systs()
         nsyst = len(systs)
@@ -615,12 +640,6 @@ class TensorWriter:
                                 )
 
                 ibin += nbinschan
-
-        # compute poisson parameter for Barlow-Beeston bin-by-bin statistical uncertainties
-        kstat = np.square(sumw) / sumw2
-        # numerical protection to avoid poorly defined constraint
-        kstat = np.where(np.equal(sumw, 0.0), 1.0, kstat)
-        kstat = np.where(np.equal(sumw2, 0.0), 1.0, kstat)
 
         # write results to hdf5 file
         procSize = nproc * np.dtype(self.dtype).itemsize

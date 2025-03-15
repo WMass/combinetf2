@@ -27,8 +27,6 @@ class FitInputData:
                 self.pseudodatanames = []
 
             # load arrays from file
-            hconstraintweights = f["hconstraintweights"]
-            hdata_obs = f["hdata_obs"]
 
             if "hdata_cov_inv" in f.keys():
                 hdata_cov_inv = f["hdata_cov_inv"]
@@ -36,21 +34,47 @@ class FitInputData:
             else:
                 self.data_cov_inv = None
 
+            # load data/pseudodata
+            if pseudodata is not None:
+                if pseudodata in self.pseudodatanames:
+                    pseudodata_idx = np.where(self.pseudodatanames == pseudodata)[0][0]
+                else:
+                    raise Exception(
+                        "Pseudodata %s not found, available pseudodata sets are %s"
+                        % (pseudodata, self.pseudodatanames)
+                    )
+                print("Run pseudodata fit for index %i: " % (pseudodata_idx))
+                print(self.pseudodatanames[pseudodata_idx])
+                hdata_obs = f["hpseudodata"]
+
+                data_obs = maketensor(hdata_obs)
+                self.data_obs = data_obs[:, pseudodata_idx]
+            else:
+                self.data_obs = maketensor(f["hdata_obs"])
+
+            hkstat = f["hkstat"]
+            self.kstat = maketensor(hkstat)
+
+            # start by creating tensors which read in the hdf5 arrays (optimized for memory consumption)
+            self.constraintweights = maketensor(f["hconstraintweights"])
+
             self.sparse = not "hnorm" in f
 
             if self.sparse:
                 print(
                     "WARNING: The sparse tensor implementation is experimental and probably slower than with a dense tensor!"
                 )
-                hnorm_sparse = f["hnorm_sparse"]
-                hlogk_sparse = f["hlogk_sparse"]
+                self.norm = makesparsetensor(f["hnorm_sparse"])
+                self.logk = makesparsetensor(f["hlogk_sparse"])
             else:
-                hnorm = f["hnorm"]
-                hlogk = f["hlogk"]
+                self.norm = maketensor(f["hnorm"])
+                self.logk = maketensor(f["hlogk"])
 
             # infer some metadata from loaded information
-            self.dtype = hdata_obs.dtype
-            self.nbins = hdata_obs.shape[-1]
+            self.dtype = self.data_obs.dtype
+            self.nbins = self.data_obs.shape[-1]
+            self.nbinsfull = self.norm.shape[0]
+            self.nbinsmasked = self.nbinsfull - self.nbins
             self.nproc = len(self.procs)
             self.nsyst = len(self.systs)
             self.nsystnoprofile = len(self.systsnoprofile)
@@ -62,7 +86,6 @@ class FitInputData:
             # reference meta data if available
             self.metadata = {}
             if "meta" in f.keys():
-                # from narf.ioutils import pickle_load_h5py
                 from wums.ioutils import pickle_load_h5py
 
                 self.metadata = pickle_load_h5py(f["meta"])
@@ -80,7 +103,18 @@ class FitInputData:
                                 name="obs",
                             )
                         ]
-                    }
+                    },
+                    "ch1": {
+                        "axes": [
+                            hist.axis.Integer(
+                                0,
+                                self.nbinsmasked,
+                                underflow=False,
+                                overflow=False,
+                                name="masked",
+                            )
+                        ]
+                    },
                 }
 
             self.symmetric_tensor = self.metadata.get("symmetric_tensor", False)
@@ -110,39 +144,6 @@ class FitInputData:
                 print(channel, info)
 
             self.axis_procs = hist.axis.StrCategory(self.procs, name="processes")
-
-            # build tensorflow graph for likelihood calculation
-
-            # start by creating tensors which read in the hdf5 arrays (optimized for memory consumption)
-            self.constraintweights = maketensor(hconstraintweights)
-
-            # load data/pseudodata
-            if pseudodata is not None:
-                if pseudodata in self.pseudodatanames:
-                    pseudodata_idx = np.where(self.pseudodatanames == pseudodata)[0][0]
-                else:
-                    raise Exception(
-                        "Pseudodata %s not found, available pseudodata sets are %s"
-                        % (pseudodata, self.pseudodatanames)
-                    )
-                print("Run pseudodata fit for index %i: " % (pseudodata_idx))
-                print(self.pseudodatanames[pseudodata_idx])
-                hdata_obs = f["hpseudodata"]
-
-                data_obs = maketensor(hdata_obs)
-                self.data_obs = data_obs[:, pseudodata_idx]
-            else:
-                self.data_obs = maketensor(hdata_obs)
-
-            hkstat = f["hkstat"]
-            self.kstat = maketensor(hkstat)
-
-            if self.sparse:
-                self.norm_sparse = makesparsetensor(hnorm_sparse)
-                self.logk_sparse = makesparsetensor(hlogk_sparse)
-            else:
-                self.norm = maketensor(hnorm)
-                self.logk = maketensor(hlogk)
 
             self.normalize = normalize
             if self.normalize:

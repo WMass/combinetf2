@@ -78,7 +78,7 @@ def parseArgs():
     )
     parser.add_argument(
         "--subtitle",
-        default=None,
+        default="",
         type=str,
         help="Subtitle to be printed after title",
     )
