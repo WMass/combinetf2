@@ -139,7 +139,7 @@ class TensorWriter:
         self.dict_norm[name] = {}
         self.dict_sumw2[name] = np.zeros(ibins)
 
-        # add masked channels last and not masked channels first
+        # add masked channels last and other channels first
         this_channel = {"axes": [a for a in axes], "masked": masked}
         if masked:
             self.channels[name] = this_channel
@@ -373,17 +373,14 @@ class TensorWriter:
         procs = sorted(list(self.signals)) + sorted(list(self.bkgs))
         nproc = len(procs)
 
-        nbins = sum(
-            [v for c, v in self.nbinschan.items() if not self.channels[c]["masked"]]
-        )
         # nbinsfull including masked channels
         nbinsfull = sum([v for v in self.nbinschan.values()])
 
         print(f"Write out nominal arrays")
         sumw = np.zeros([nbinsfull], self.dtype)
         sumw2 = np.zeros([nbinsfull], self.dtype)
-        data_obs = np.zeros([nbins], self.dtype)
-        pseudodata = np.zeros([nbins, len(self.pseudodata_names)], self.dtype)
+        data_obs = np.zeros([nbinsfull], self.dtype)
+        pseudodata = np.zeros([nbinsfull, len(self.pseudodata_names)], self.dtype)
         ibin = 0
         for chan, chan_info in self.channels.items():
             nbinschan = self.nbinschan[chan]
@@ -396,10 +393,11 @@ class TensorWriter:
 
                 sumw[ibin : ibin + nbinschan] += self.dict_norm[chan][proc]
 
-            if not chan_info["masked"]:
+            if not chan_info["masked"] or chan in self.dict_data_obs.keys():
                 data_obs[ibin : ibin + nbinschan] = self.dict_data_obs[chan]
 
-                for idx, name in enumerate(self.pseudodata_names):
+            for idx, name in enumerate(self.pseudodata_names):
+                if not chan_info["masked"] or chan in self.dict_data_obs.keys():
                     pseudodata[ibin : ibin + nbinschan, idx] = self.dict_pseudodata[
                         chan
                     ][name]
