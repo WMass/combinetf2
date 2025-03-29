@@ -189,6 +189,13 @@ def parseArgs():
     parser.add_argument(
         "--logTransform", action="store_true", help="Log transform the events"
     )
+    parser.add_argument(
+        "--dataHist",
+        type=str,
+        default="nobs",
+        choices=["data_obs", "nobs"],
+        help="Which data to plot ('data_obs': data histogram provided in input data; 'nobs': Plot (pseudo) data used in the fit)",
+    )
     parser.add_argument("--noData", action="store_true", help="Don't plot the data")
     parser.add_argument(
         "--noUncertainty", action="store_true", help="Don't plot total uncertainty band"
@@ -200,11 +207,12 @@ def parseArgs():
         "--prefit", action="store_true", help="Make prefit plot, else postfit"
     )
     parser.add_argument(
-        "--project",
+        "-m",
+        "--physicsModel",
         nargs="+",
         action="append",
         default=[],
-        help='add projection for the prefit and postfit histograms, specifying the channel name followed by the axis names, e.g. "--project ch0 eta pt".  This argument can be called multiple times',
+        help='Make plot of physics model prefit and postfit histograms, specifying the model name, followed by the instance key and channel name, e.g. "-m project ch0_eta_pt ch0". This argument can be called multiple times',
     )
     parser.add_argument(
         "--filterProcs",
@@ -408,7 +416,11 @@ def make_plot(
             axes = axes[::-1]
 
         # make unrolled 1D histograms
-        if h_data is not None and binwnorm is not None and not args.unfoldedXsec:
+        if (
+            h_data is not None
+            and binwnorm is not None
+            and h_data.storage_type != hist.storage.Weight()
+        ):
             # need hist with variances to handle bin width normaliztion
             h_data_tmp = hist.Hist(
                 *[a for a in h_data.axes], storage=hist.storage.Weight()
@@ -537,13 +549,13 @@ def make_plot(
                 zorder=2,
                 flow="none",
             )
-    if args.unfoldedXsec:
+    if args.unfoldedXsec or len(h_stack) == 0:
         hep.histplot(
             h_inclusive,
             yerr=False,
             histtype="step",
             color="black",
-            label="Prefit model",
+            label="Prefit model" if args.unfoldedXsec else "Prediction",
             binwnorm=binwnorm,
             ax=ax1,
             alpha=1.0,
@@ -856,7 +868,6 @@ def make_plot(
 
 def make_plots(
     result,
-    axes,
     outdir,
     procs=None,
     labels=None,
@@ -882,13 +893,19 @@ def make_plots(
         hist_inclusive = result[f"hist_prefit_inclusive"].get()
         hist_stack = []
     else:
-        if "hist_data_obs" in result.keys():
-            hist_data = result["hist_data_obs"].get()
+        if f"hist_{args.dataHist}" in result.keys():
+            hist_data = result[f"hist_{args.dataHist}"].get()
         else:
             hist_data = None
+
         hist_inclusive = result[f"hist_{fittype}_inclusive"].get()
-        hist_stack = result[f"hist_{fittype}"].get()
-        hist_stack = [hist_stack[{"processes": p}] for p in procs]
+        if f"hist_{fittype}" in result.keys():
+            hist_stack = result[f"hist_{fittype}"].get()
+            hist_stack = [hist_stack[{"processes": p}] for p in procs]
+        else:
+            hist_stack = []
+
+    axes = [a for a in hist_inclusive.axes]
 
     # vary poi by postfit uncertainty
     if varNames is not None:
@@ -934,7 +951,10 @@ def make_plots(
 
     if args.unfoldedXsec:
         # convert number in cross section in pb
-        to_xsc = lambda h: hh.scaleHist(h, 1.0 / (lumi * 1000))
+        if lumi is not None:
+            to_xsc = lambda h: hh.scaleHist(h, 1.0 / (lumi * 1000))
+        else:
+            to_xsc = lambda h: h
         hist_data = to_xsc(hist_data)
         hist_inclusive = to_xsc(hist_inclusive)
         hist_stack = [to_xsc(h) for h in hist_stack]
@@ -1051,7 +1071,6 @@ def get_chi2(result, no_chi2=True, fittype="postfit"):
         satnllvalfull = result["satnllvalfull"]
         chi2 = 2.0 * (nllvalfull - satnllvalfull)
         ndf = result["ndfsat"]
-        saturated_chi2 = True
         return chi2, ndf, True
     elif f"chi2_{fittype}" in result and not no_chi2:
         return result[f"chi2_{fittype}"], result[f"ndf_{fittype}"], False
@@ -1092,9 +1111,6 @@ def main():
     )
 
     meta_info = meta["meta_info"]
-    is_normalized = (
-        meta_info["args"].get("normalize", False) if meta is not None else False
-    )
 
     plt.rcParams["font.size"] = plt.rcParams["font.size"] * args.scaleTextSize
 
@@ -1125,42 +1141,58 @@ def main():
         varNames=varNames,
         varLabels=varLabels,
         varColors=varColors,
-        is_normalized=is_normalized,
     )
 
-    for projection in args.project:
-        channel = projection[0]
-        axes = projection[1:]
-        info = channel_info[channel]
-        if len(axes) == 0:
-            axes = ["yield"]
-        result = fitresult["channels"][channel]["projections"]["_".join(axes)]
-        chi2, ndf, _ = get_chi2(result, args.noChisq, fittype)
+    if len(args.physicsModel) == 0:
+        models = [["basemodel"]]
+    else:
+        models = args.physicsModel
 
-        make_plots(
-            result,
-            [a for a in info["axes"] if a.name in axes],
-            outdir,
-            channel=channel,
-            chi2=[chi2, ndf],
-            lumi=info.get("lumi", None),
-            **opts,
-        )
+    for margs in models:
+        model = margs[0]
 
-    for channel, info in channel_info.items():
-        result = fitresult[f"channels"][channel]
-        chi2, ndf, saturated_chi2 = get_chi2(fitresult, args.noChisq, fittype)
+        if model not in fitresult.keys():
+            raise ValueError(f"Model {model} not found in fitresult")
 
-        make_plots(
-            result,
-            info["axes"],
-            outdir,
-            channel=channel,
-            chi2=[chi2, ndf],
-            saturated_chi2=saturated_chi2,
-            lumi=info.get("lumi", None),
-            **opts,
-        )
+        is_normalized = model in ["normalized", "normratio"]
+
+        if len(margs) > 1:
+            instance_key = margs[1]
+            if instance_key not in fitresult[model].keys():
+                raise ValueError(
+                    f"Instance {instance_key} of model {model} not found in fitresult"
+                )
+        else:
+            instance_key = None
+
+        for instance_name, instance in fitresult[model].items():
+            if instance_key is not None and instance_name != instance_key:
+                continue
+
+            chi2, ndf, saturated_chi2 = get_chi2(instance, args.noChisq, fittype)
+
+            if len(margs) > 2:
+                if margs[2] not in instance["channels"][model].keys():
+                    raise ValueError(
+                        f"Channel {margs[2]} of instance {instance_name} of model {model} not found in fitresult"
+                    )
+
+            for channel, result in instance["channels"].items():
+                if len(margs) > 2 and margs[2] != channel:
+                    continue
+
+                info = channel_info.get(channel, {})
+
+                make_plots(
+                    result,
+                    outdir,
+                    channel=channel,
+                    chi2=[chi2, ndf],
+                    saturated_chi2=saturated_chi2,
+                    lumi=info.get("lumi", None),
+                    is_normalized=is_normalized,
+                    **opts,
+                )
 
     if output_tools.is_eosuser_path(args.outpath) and args.eoscp:
         output_tools.copy_to_eos(outdir, args.outpath, args.outfolder)

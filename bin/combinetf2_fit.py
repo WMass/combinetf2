@@ -11,6 +11,7 @@ import h5py
 import numpy as np
 
 from combinetf2 import fitter, inputdata, io_tools, workspace
+from combinetf2.physicsmodels import helpers as ph
 
 from wums import output_tools, logging  # isort: skip
 
@@ -224,19 +225,15 @@ def make_parser():
         help="run fit on pseudo data with the given name",
     )
     parser.add_argument(
-        "--normalize",
-        default=False,
-        action="store_true",
-        help="Normalize prediction and systematic uncertainties to the overall event yield in data",
-    )
-    parser.add_argument(
-        "--project",
+        "-m",
+        "--physicsModel",
         nargs="+",
         action="append",
-        default=[],
+        default=[["basemodel"]],
         help="""
-        add projection for the prefit and postfit histograms, specifying the channel name followed by the axis names, 
-        e.g. "--project ch0 eta pt" or "--project ch0" to get the total yield.  
+        add physics model to perform transformations on observables for the prefit and postfit histograms, 
+        specifying the model defined in combinetf2/physicsmodels.py followed by arguments passed in the model __init__, 
+        e.g. "-m project ch0 eta pt" to get a 2D projection to eta-pt or "-m project ch0" to get the total yield.  
         This argument can be called multiple times
         """,
     )
@@ -274,152 +271,94 @@ def make_parser():
     return parser.parse_args()
 
 
-def save_hists(args, fitter, ws, prefit=True, profile=False):
+def save_observed_hists(args, models, fitter, ws):
+    for model in models:
+        if not model.has_data:
+            continue
 
-    logger.info(f"Save - inclusive hist")
-
-    exp, aux = fitter.expected_events(
-        inclusive=True,
-        compute_variance=args.computeHistErrors,
-        compute_cov=args.computeHistCov,
-        compute_chi2=not args.noChi2,
-        compute_global_impacts=args.computeHistImpacts and not prefit,
-        profile=profile,
-    )
-
-    ws.add_expected_hists(
-        fitter.indata.channel_info,
-        exp,
-        var=aux[0],
-        cov=aux[1],
-        impacts=aux[2],
-        impacts_grouped=aux[3],
-        chi2=aux[4],
-        ndf=aux[5],
-        prefit=prefit,
-    )
-
-    if args.saveHistsPerProcess:
-        logger.info(f"Save - processes hist")
-
-        exp, aux = fitter.expected_events(
-            inclusive=False,
-            compute_variance=args.computeHistErrors,
-            profile=profile,
+        print(f"Save data histogram for physics model {model.name}")
+        ws.add_observed_hists(
+            model,
+            fitter.indata.data_obs,
+            fitter.nobs.value(),
+            fitter.indata.data_cov_inv,
+            fitter.data_cov_inv,
         )
 
-        ws.add_expected_hists(
-            fitter.indata.channel_info,
-            exp,
-            var=aux[0],
-            process_axis=fitter.indata.axis_procs,
-            prefit=prefit,
-        )
 
-    for p in args.project:
-        channel = p[0]
-        axes_names = p[1:]
-        channel_info = fitter.indata.channel_info[channel]
-        channel_axes = channel_info["axes"]
+def save_hists(args, models, fitter, ws, prefit=True, profile=False):
 
-        logger.info(f"Save projection for channel {channel} - inclusive")
+    for model in models:
+        logger.info(f"Save inclusive histogram for physics model {model.name}")
 
-        exp, aux = fitter.expected_events_projection(
-            channel=channel,
-            axes=axes_names,
-            inclusive=True,
-            compute_variance=args.computeHistErrors,
-            compute_cov=args.computeHistCov,
-            compute_chi2=not args.noChi2,
-            compute_global_impacts=args.computeHistImpacts and not prefit,
-            masked=channel_info.get("masked", False),
-            profile=profile,
-        )
+        if prefit and getattr(model, "skip_prefit", False):
+            continue
 
-        ws.add_expected_projection_hists(
-            channel,
-            axes_names,
-            channel_axes,
-            exp,
-            var=aux[0],
-            cov=aux[1],
-            impacts=aux[2],
-            impacts_grouped=aux[3],
-            chi2=aux[4],
-            ndf=aux[5],
-            prefit=prefit,
-        )
-
-        if args.saveHistsPerProcess:
-            logger.info(f"Save projection for channel {channel} - processes")
-
-            exp, aux = fitter.expected_events_projection(
-                channel=channel,
-                axes=axes_names,
-                inclusive=False,
+        if not getattr(model, "skip_incusive", False):
+            exp, aux = fitter.expected_events(
+                model,
+                inclusive=not getattr(model, "need_processes", False),
                 compute_variance=args.computeHistErrors,
-                masked=channel_info.get("masked", False),
+                compute_cov=args.computeHistCov,
+                compute_chi2=not args.noChi2 and model.has_data,
+                compute_global_impacts=args.computeHistImpacts and not prefit,
                 profile=profile,
             )
 
-            ws.add_expected_projection_hists(
-                channel,
-                axes_names,
-                channel_axes,
+            ws.add_expected_hists(
+                model,
+                exp,
+                var=aux[0],
+                cov=aux[1],
+                impacts=aux[2],
+                impacts_grouped=aux[3],
+                prefit=prefit,
+            )
+
+            if aux[4] is not None:
+                ws.add_chi2(aux[4], aux[5], prefit, model)
+
+        if args.saveHistsPerProcess and not getattr(model, "skip_per_process", False):
+            logger.info(f"Save processes histogram for {model.name}")
+
+            exp, aux = fitter.expected_events(
+                model,
+                inclusive=False,
+                compute_variance=args.computeHistErrors,
+                profile=profile,
+            )
+
+            ws.add_expected_hists(
+                model,
                 exp,
                 var=aux[0],
                 process_axis=fitter.indata.axis_procs,
                 prefit=prefit,
             )
 
-    if args.computeVariations:
-        if prefit:
-            cov_prefit = fitter.cov.numpy()
-            fitter.cov.assign(fitter.prefit_covariance(unconstrained_err=1.0))
+        if args.computeVariations:
+            if prefit:
+                cov_prefit = fitter.cov.numpy()
+                fitter.cov.assign(fitter.prefit_covariance(unconstrained_err=1.0))
 
-        exp, aux = fitter.expected_events(
-            inclusive=True,
-            compute_variance=False,
-            compute_variations=True,
-            profile=False,
-        )
-
-        ws.add_expected_hists(
-            fitter.indata.channel_info,
-            exp,
-            var=aux[0],
-            variations=True,
-            prefit=prefit,
-        )
-
-        for p in args.project:
-            channel = p[0]
-            axes = p[1:]
-            channel_info = fitter.indata.channel_info[channel]
-            channel_axes = channel_info["axes"]
-
-            exp, aux = fitter.expected_events_projection(
-                channel=channel,
-                axes=axes,
-                inclusive=True,
+            exp, aux = fitter.expected_events(
+                model,
+                inclusive=getattr(model, "need_processes", True),
                 compute_variance=False,
                 compute_variations=True,
-                profile=False,
-                masked=channel_info.get("masked", False),
+                profile=profile,
             )
 
-            ws.add_expected_projection_hists(
-                channel,
-                axes,
-                channel_axes,
+            ws.add_expected_hists(
+                model,
                 exp,
                 var=aux[0],
                 variations=True,
                 prefit=prefit,
             )
 
-        if prefit:
-            fitter.cov.assign(tf.constant(cov_prefit))
+            if prefit:
+                fitter.cov.assign(tf.constant(cov_prefit))
 
 
 def fit(args, fitter, ws, dofit=True):
@@ -591,10 +530,14 @@ def main():
     global logger
     logger = logging.setup_logger(__file__, args.verbose, args.noColorLogger)
 
-    indata = inputdata.FitInputData(
-        args.filename, args.pseudoData, normalize=args.normalize
-    )
+    indata = inputdata.FitInputData(args.filename, args.pseudoData)
     ifitter = fitter.Fitter(indata, args)
+
+    # physics models for observables and transformations
+    models = []
+    for margs in args.physicsModel:
+        model = ph.instance_from_module(margs[0], indata, *margs[1:])
+        models.append(model)
 
     np.random.seed(args.seed)
     tf.random.set_seed(args.seed)
@@ -613,7 +556,6 @@ def main():
         args.outname,
         postfix=args.postfix,
         fitter=ifitter,
-        projections=args.project,
     ) as ws:
 
         ws.write_meta(meta=meta)
@@ -632,7 +574,6 @@ def main():
         fit_time = []
         for ifit in fits:
             ifitter.defaultassign()
-            ws.reset_results(ifitter.indata.channel_info.keys())
 
             group = "results"
             if ifit == -1:
@@ -656,12 +597,8 @@ def main():
             )
 
             if args.saveHists:
-                ws.add_observed_hists(
-                    ifitter.indata.channel_info,
-                    ifitter.indata.data_obs,
-                    ifitter.nobs.value(),
-                )
-                save_hists(args, ifitter, ws, prefit=True)
+                save_observed_hists(args, models, ifitter, ws)
+                save_hists(args, models, ifitter, ws, prefit=True)
             prefit_time.append(time.time())
 
             fit(args, ifitter, ws, dofit=ifit >= 0)
@@ -670,6 +607,7 @@ def main():
             if args.saveHists:
                 save_hists(
                     args,
+                    models,
                     ifitter,
                     ws,
                     prefit=False,

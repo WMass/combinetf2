@@ -98,11 +98,21 @@ This is useful for example to compute unfolded (differential) cross sections and
 
 For example:
 ```bash
-combinetf2_fit test_tensor.hdf5 -o results/fitresult.hdf5 -t 0 --doImpacts --globalImpacts --binByBinStat --saveHists --computeHistErrors --project ch1 a --project ch1 b
+combinetf2_fit test_tensor.hdf5 -o results/fitresult.hdf5 -t 0 --doImpacts --globalImpacts --binByBinStat --saveHists --computeHistErrors
 ```
 
 ### Bin-by-bin statistical uncertainties
 Bin-by-bin statistical uncertainties on the templates can be added at runtime using the `--binByBinStat` option.  The Barlow-Beeston lite method is used to add implicit nuisance parameters for each template bin.  By default this is implemented using a gamma distribution for the probability density, but Gaussian uncertainties can also be used with `--binByBinStatType normal`.
+
+### Physics models
+Physics models are used to perform transformation on the observables (the histogram bins in the (masked) channels). 
+They are defined `combinetf2/physicsmodels.py` and can be called in `combinetf2_fit` with the `--PhysicsModel` or `-m` option e.g. ` -m project ch1 a -m project ch1 b`. 
+The first argument is the physics model name followed by arguments passed into the physics model.
+Custom physics models can be added to make the desired transformation. Available physics models are
+ * "project": To project histograms to lower dimensions, respecting the covariance matrix across bins.
+ * "normalize": To normalize histograms to their sum (and project them) e.g. to compute normalized differential cross sections.
+ * "ratio": To compute the ratio between channels, processes, or histogram bins.
+ * "normratio": To compute the ratio of normalized histograms.
 
 ## Fit diagnostics
 

@@ -14,6 +14,11 @@ def get_fitresult(fitresult_filename, result=None, meta=False):
         key = f"{key}_{result}"
     elif key not in h5file.keys():  # fallback in case only asimov was fit
         key = f"{key}_asimov"
+        if key not in h5file.keys():
+            raise ValueError(
+                f"'{key}' not in h5file, available keys are {h5file.keys()}"
+            )
+
     h5results = ioutils.pickle_load_h5py(h5file[key])
     if meta:
         meta = ioutils.pickle_load_h5py(h5file["meta"])

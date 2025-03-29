@@ -165,14 +165,20 @@ jobs:
       - name: nominal fit
         run: >- 
           combinetf2_fit.py $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/
-          -t 0 --binByBinStat --doImpacts --globalImpacts --project ch1 a --project ch1 b --project ch0_masked
+          -t 0 --binByBinStat --doImpacts --globalImpacts
           --saveHists --saveHistsPerProcess --computeHistErrors --computeHistCov --computeHistImpacts --computeVariations
+          -m project ch1 a -m project ch1 b -m project ch0_masked 
+          -m normalize ch0 x
+          -m ratio ch0 ch0 sig sig,bkg
+          -m ratio ch0 ch1 'None:None' 'b:slice(0,2)'
+          -m ratio ch0 ch1 'x:slice(None,None,2)' 'a:slice(None),b:slice(None)'
+          -m normratio ch1 ch1 sig sig,bkg 'b:slice(None)' 'b:2'
 
       - name: sparse tensor fit 
         run: >- 
           combinetf2_fit.py $COMBINETF2_OUTDIR/test_tensor_sparse.hdf5 -o $COMBINETF2_OUTDIR/ --postfix sparse
           -t -0 --binByBinStat --doImpacts --globalImpacts --computeVariations
-          --saveHists --saveHistsPerProcess --computeHistErrors --project ch1 a --project ch1 b 
+          --saveHists --saveHistsPerProcess --computeHistErrors -m project ch1 a -m project ch1 b 
 
       - name: pseudodata fit
         run: >- 
@@ -183,7 +189,7 @@ jobs:
         run: >- 
           combinetf2_fit.py $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/ --postfix chi2
           -t -0 --chisqFit --externalCovariance --doImpacts --globalImpacts 
-          --saveHists --saveHistsPerProcess --computeHistErrors --project ch1 a --project ch1 b 
+          --saveHists --saveHistsPerProcess --computeHistErrors -m project ch1 a -m project ch1 b 
 
 
   plotting:
@@ -216,7 +222,7 @@ jobs:
         run: combinetf2_print_impacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 -s --globalImpacts
 
       - name: print global impacts of observable
-        run: combinetf2_print_impacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 --globalImpacts --hist ch0_masked yield --ungroup --sort
+        run: combinetf2_print_impacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 --globalImpacts -m project ch0_masked ch0_masked --ungroup --sort
 
       - name: plot impacts
         run: >-
@@ -233,31 +239,53 @@ jobs:
       - name: plot global impacts on observable
         run: >-
           combinetf2_plot_pulls_and_impacts.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR
-          -s absimpact --hist ch0_masked yield
+          -s absimpact -m project ch0_masked ch0_masked
           --otherExtensions pdf png -n 50  --config tests/style_config.py --oneSidedImpacts --globalImpacts --showNumbers
           --grouping max --subtitle Preliminary --postfix ch0_masked
 
       - name: plot prefit distributions
         run: >-
           combinetf2_plot_hists.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
-          --extraTextLoc '0.05' '0.7' --legCols 1 --project ch1 a --project ch1 b --yscale '1.2' 
+          --extraTextLoc '0.05' '0.7' --legCols 1 -m basemodel -m project ch1_a -m project ch1_b --yscale '1.2' 
           --subtitle Preliminary --prefit --config tests/style_config.py
 
       - name: plot postfit distributions
         run: >-
           combinetf2_plot_hists.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
-          --extraTextLoc '0.05' '0.7' --legCols 1 --project ch1 a --project ch1 b --yscale '1.2' 
+          --extraTextLoc '0.05' '0.7' --legCols 1 -m basemodel -m project ch1_a -m project ch1_b -m normalize ch0_x --yscale '1.2' 
           --subtitle Preliminary --varNames 'slope_signal' --varColors orange --config tests/style_config.py --rrange 0.8 1.2
+
+      - name: plot histogram uncertainties
+        run: >-
+          combinetf2_plot_hists_uncertainties.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
+          --extraTextLoc '0.05' '0.7' --legCols 1 -m project ch1_a -m project ch1_b --yscale '1.2' --subtitle Preliminary --config tests/style_config.py
+
+      - name: plot postfit signal fraction
+        run: >-
+          combinetf2_plot_hists.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR  
+          -m ratio ch0_x --yscale 1.2 --subtitle Preliminary --config tests/style_config.py --ylabel 'sig/(sig+bkg)' --postfix signalfraction
+
+      - name: plot postfit signal fraction uncertainties
+        run: >-
+          combinetf2_plot_hists_uncertainties.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR  
+          -m ratio ch0_x --subtitle Preliminary --config tests/style_config.py --ylabel 'sig/(sig+bkg)' --postfix signalfraction
+
+      - name: plot postfit ratio
+        run: >-
+          combinetf2_plot_hists.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR  
+          -m ratio ch0_ch1_a0 --yscale 1.2 --subtitle Preliminary --config tests/style_config.py --ylabel 'ch0/ch1' --postfix ratio
+
+      - name: plot postfit ratio uncertainties
+        run: >-
+          combinetf2_plot_hists_uncertainties.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR  
+          -m ratio ch0_ch1_a0 --subtitle Preliminary --config tests/style_config.py --ylabel 'ch0/ch1' --postfix ratio
+
 
       - name: plot histogram covariance matrices
         run: >-
           combinetf2_plot_hists_cov.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
-          --subtitle Preliminary --project ch1 a --project ch1 b --subtitle Preliminary --config tests/style_config.py
+          --subtitle Preliminary -m project ch1_a -m project ch1_b --subtitle Preliminary --config tests/style_config.py
 
-      - name: plot histogram impacts
-        run: >-
-          combinetf2_plot_hists_uncertainties.py $COMBINETF2_OUTDIR/fitresults.hdf5 -o $WEB_DIR/$PLOT_DIR 
-          --extraTextLoc '0.05' '0.7' --legCols 1 --project ch1 a --project ch1 b --yscale '1.2' --subtitle Preliminary --config tests/style_config.py
 
   likelihoodscans:
     runs-on: [self-hosted, linux, x64]

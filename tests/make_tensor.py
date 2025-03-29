@@ -38,7 +38,7 @@ args = parser.parse_args()
 
 # Make histograms
 ax_x = hist.axis.Regular(10, -5, 5, name="x")
-ax_a = hist.axis.Regular(12, 0, 5, name="a")
+ax_a = hist.axis.Regular(10, 0, 5, name="a")
 ax_b = hist.axis.Variable([0, 1, 3, 6, 10, 20], name="b")
 
 h1_data = hist.Hist(ax_x, storage=hist.storage.Double())

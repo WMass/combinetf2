@@ -556,26 +556,27 @@ def readHistImpacts(
     normalize=False,
     scale=1,
 ):
-    labels_pulls, pulls, constraints = io_tools.get_pulls_and_constraints(
-        fitresult, asym=asym
-    )
-    labels_pulls_prefit, pulls_prefit, constraints_prefit = (
-        io_tools.get_pulls_and_constraints(fitresult, asym=asym, prefit=True)
-    )
-
     labels = np.array(hist_impacts.axes["impacts"])
     impacts = hist_impacts.values()
 
-    labels, idxs, idxs_pulls = np.intersect1d(
-        labels, labels_pulls, assume_unique=True, return_indices=True
-    )
+    if not group:
+        labels_pulls, pulls, constraints = io_tools.get_pulls_and_constraints(
+            fitresult, asym=asym
+        )
+        labels_pulls_prefit, pulls_prefit, constraints_prefit = (
+            io_tools.get_pulls_and_constraints(fitresult, asym=asym, prefit=True)
+        )
 
-    pulls = pulls[idxs_pulls]
-    constraints = constraints[idxs_pulls]
-    pulls_prefit = pulls_prefit[idxs_pulls]
-    constraints_prefit = constraints_prefit[idxs_pulls]
+        labels, idxs, idxs_pulls = np.intersect1d(
+            labels, labels_pulls, assume_unique=True, return_indices=True
+        )
 
-    impacts = impacts[idxs]
+        pulls = pulls[idxs_pulls]
+        constraints = constraints[idxs_pulls]
+        pulls_prefit = pulls_prefit[idxs_pulls]
+        constraints_prefit = constraints_prefit[idxs_pulls]
+
+        impacts = impacts[idxs]
 
     total = np.sqrt(hist_total.variance)
     if group:
@@ -684,11 +685,12 @@ def parseArgs():
         help="fitresults key in file (e.g. 'asimov'). Leave empty for data fit result.",
     )
     parser.add_argument(
-        "--hist",
+        "-m",
+        "--physicsModel",
         default=None,
         type=str,
         nargs="+",
-        help="Print impacts on observables use '--hist channel' or for projections '--hist channel ax0 ax1'.",
+        help="Print impacts on observables use '-m <model> channel axes' for physics model results.",
     )
     parser.add_argument(
         "-r",
@@ -729,7 +731,6 @@ def parseArgs():
         help="Sort mode for nuisances",
     )
     parser.add_argument(
-        "-m",
         "--mode",
         choices=["group", "ungrouped", "both"],
         default="both",
@@ -862,6 +863,7 @@ def make_plots(
     postfix=None,
     impact_title=None,
 ):
+
     if args.sort:
         if args.sort.endswith("diff"):
             key = args.sort.replace("_diff", "")
@@ -1193,7 +1195,7 @@ def main():
     if args.grouping is not None:
         grouping = getattr(config, "nuisance_grouping", {}).get(args.grouping, None)
 
-    if args.hist is not None:
+    if args.physicsModel is not None:
         if args.asymImpacts:
             raise NotImplementedError(
                 "Asymetric impacts on observables is not yet implemented"
@@ -1203,21 +1205,10 @@ def main():
                 "Only global impacts on observables is implemented (use --globalImpacts)"
             )
 
-        channel = args.hist[0]
-        projection_axes = args.hist[1:]
-        channel_hists = fitresult["channels"][channel]
-
-        if len(projection_axes) > 0:
-            projection_hists = channel_hists["projections"]
-            key = "_".join(projection_axes)
-            if key not in projection_hists.keys():
-                available = [k.split("_") for k in projection_hists.keys()]
-                raise ValueError(
-                    f"Histogram projection with axes {projection_axes} not found! Available histograms: {available}"
-                )
-            hists = projection_hists[key]
-        else:
-            hists = channel_hists
+        model = args.physicsModel[0]
+        instance = args.physicsModel[1]
+        channel = args.physicsModel[2]
+        hists = fitresult[model][instance]["channels"][channel]
 
         modes = ["ungrouped", "group"] if args.mode == "both" else [args.mode]
         for mode in modes:

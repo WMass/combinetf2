@@ -1,13 +1,12 @@
 import h5py
 import hist
 import numpy as np
-import tensorflow as tf
 
 from combinetf2.h5pyutils import makesparsetensor, maketensor
 
 
 class FitInputData:
-    def __init__(self, filename, pseudodata=None, normalize=False):
+    def __init__(self, filename, pseudodata=None):
         with h5py.File(filename, mode="r") as f:
 
             # load text arrays from file
@@ -145,66 +144,3 @@ class FitInputData:
                 print(channel, info)
 
             self.axis_procs = hist.axis.StrCategory(self.procs, name="processes")
-
-            self.normalize = normalize
-            if self.normalize:
-                # normalize prediction and each systematic to total event yield in data
-                # FIXME this should be done per-channel ideally
-
-                data_sum = tf.reduce_sum(self.data_obs)
-                norm_sum = tf.reduce_sum(self.norm)
-                lognorm_sum = tf.math.log(norm_sum)[None, None, ...]
-
-                if self.symmetric_tensor:
-                    raise NotImplementedError(
-                        "Normalized distributions with symmetric tensor is currently not supported. Need to validate implementation ..."
-                    )
-                    logkdown = self.logk[..., :]
-                    logdown_sum = tf.math.log(
-                        tf.reduce_sum(
-                            tf.exp(-logkdown) * self.norm[..., None], axis=(0, 1)
-                        )
-                    )[None, None, ...]
-                    logkdown = logkdown + logdown_sum - lognorm_sum
-
-                    logkup = self.logk[..., :]
-                    logup_sum = tf.math.log(
-                        tf.reduce_sum(
-                            tf.exp(logkup) * self.norm[..., None], axis=(0, 1)
-                        )
-                    )[None, None, ...]
-                    logkup = logkup - logup_sum + lognorm_sum
-
-                    # Compute new logkavg
-                    logk_array = 0.5 * (logkup + logkdown)
-                else:
-
-                    logkavg = self.logk[..., 0, :]
-                    logkhalfdiff = self.logk[..., 1, :]
-
-                    logkdown = logkavg - logkhalfdiff
-                    logdown_sum = tf.math.log(
-                        tf.reduce_sum(
-                            tf.exp(-logkdown) * self.norm[..., None], axis=(0, 1)
-                        )
-                    )[None, None, ...]
-                    logkdown = logkdown + logdown_sum - lognorm_sum
-
-                    logkup = logkavg + logkhalfdiff
-                    logup_sum = tf.math.log(
-                        tf.reduce_sum(
-                            tf.exp(logkup) * self.norm[..., None], axis=(0, 1)
-                        )
-                    )[None, None, ...]
-                    logkup = logkup - logup_sum + lognorm_sum
-
-                    # Compute new logkavg and logkhalfdiff
-                    logkavg = 0.5 * (logkup + logkdown)
-                    logkhalfdiff = 0.5 * (logkup - logkdown)
-
-                    # Stack logkavg and logkhalfdiff to form the new logk_array using tf.stack
-                    logk_array = tf.stack([logkavg, logkhalfdiff], axis=-2)
-
-                # Finally, set self.logk to the new computed logk_array
-                self.logk = logk_array
-                self.norm = self.norm * (data_sum / norm_sum)[None, None, ...]

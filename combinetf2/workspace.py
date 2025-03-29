@@ -55,15 +55,8 @@ def get_name_label_expected_hists(
 
 
 class Workspace:
-    def __init__(self, outdir, outname, fitter, postfix=None, projections=[]):
-
-        channels = set(p[0] for p in projections)
-        self.projections = {c: [] for c in channels}
-        for p in projections:
-            self.projections[p[0]].append(p[1:])
-
+    def __init__(self, outdir, outname, fitter, postfix=None):
         self.results = {}
-        self.reset_results(fitter.indata.channel_info.keys())
 
         # some information for the impact histograms
         self.global_impact_axis = getGlobalImpactsAxes(fitter.indata)
@@ -91,20 +84,6 @@ class Workspace:
             self.fout.close()
             self.fout = None
 
-    def reset_results(self, channels):
-        self.results["channels"] = {}
-        for c in channels:
-            self.results["channels"][c] = {}
-            projections = self.projections.get(c, [])
-            if len(projections):
-                self.results["channels"][c]["projections"] = {}
-                for a in projections:
-                    if len(a) == 0:
-                        key = "yield"
-                    else:
-                        key = "_".join(a)
-                    self.results["channels"][c]["projections"][key] = {}
-
     def get_file_path(self, outdir, outname, postfix=None):
         # create output file name
         file_path = os.path.join(outdir, outname)
@@ -121,25 +100,32 @@ class Workspace:
             file_path = f"{parts[0]}_{postfix}.{parts[1]}"
         return file_path
 
-    def dump_obj(self, obj, key, channel=None, projection_axes=None):
-        if channel is not None:
-            if projection_axes is not None:
-                self.results["channels"][channel]["projections"][
-                    "_".join(projection_axes)
-                ][key] = obj
-            else:
-                self.results["channels"][channel][key] = obj
-        else:
-            self.results[key] = obj
+    def dump_obj(
+        self, obj, key, model_name=None, model_instance_name=None, channel=None
+    ):
+        result = self.results
+        for idf in [model_name, model_instance_name]:
+            if idf is None:
+                continue
+            if idf not in result.keys():
+                result[idf] = {}
+            result = result[idf]
 
-    def dump_hist(self, hist, channel=None, projection_axes=None):
+        if channel is not None:
+            if "channels" not in result.keys():
+                result["channels"] = {}
+            if channel not in result["channels"]:
+                result["channels"][channel] = {}
+            result = result["channels"][channel]
+
+        result[key] = obj
+
+    def dump_hist(self, hist, *args, **kwargs):
         name = hist.name
         h = ioutils.H5PickleProxy(hist)
-        self.dump_obj(h, name, channel, projection_axes)
+        self.dump_obj(h, name, *args, **kwargs)
 
     def hist(self, name, axes, values, variances=None, label=None):
-        if not isinstance(axes, (list, tuple, np.ndarray)):
-            axes = [axes]
         storage_type = (
             hist.storage.Weight() if variances is not None else hist.storage.Double()
         )
@@ -155,73 +141,80 @@ class Workspace:
         axes,
         values,
         variances=None,
+        start=None,
+        stop=None,
         label=None,
         channel=None,
-        projection_axes=None,
+        model_name=None,
+        model_instance_name=None,
     ):
+        if not isinstance(axes, (list, tuple, np.ndarray)):
+            axes = [axes]
+        if start is not None or stop is not None:
+            values = values[start:stop]
+            if variances is not None:
+                variances = variances[start:stop]
         h = self.hist(name, axes, values, variances, label)
-        self.dump_hist(h, channel, projection_axes)
+        self.dump_hist(h, model_name, model_instance_name, channel)
 
-    def add_value(self, value, name, channel=None, projection_axes=None):
-        self.dump_obj(value, name, channel, projection_axes)
+    def add_value(self, value, name, *args, **kwargs):
+        self.dump_obj(value, name, *args, **kwargs)
 
-    def add_observed_hists(self, channel_info, data_obs, nobs):
+    def add_chi2(self, chi2, ndf, prefit, model):
+        postfix = "_prefit" if prefit else ""
+        self.add_value(ndf, "ndf" + postfix, model.name, model.instance)
+        self.add_value(chi2, "chi2" + postfix, model.name, model.instance)
+
+    def add_observed_hists(
+        self, model, data_obs, nobs, data_cov_inv=None, nobs_cov_inv=None
+    ):
         hists_data_obs = {}
         hists_nobs = {}
 
-        for channel, info in channel_info.items():
-            if info.get("masked", False):
-                continue
-            axes = info["axes"]
+        values_data_obs, variances_data_obs, cov_data_obs = model.get_data(
+            data_obs, data_cov_inv
+        )
+        values_nobs, variances_nobs, cov_nobs = model.get_data(nobs, nobs_cov_inv)
 
+        for channel, info in model.channel_info.items():
+            axes = info["axes"]
             start = info["start"]
             stop = info["stop"]
 
-            h_data_obs = self.hist(
+            if info.get("masked", False):
+                continue
+
+            if len(axes) == 0:
+                axes = [
+                    hist.axis.Integer(
+                        0, 1, name="yield", overflow=False, underflow=False
+                    )
+                ]
+
+            opts = dict(
+                start=start,
+                stop=stop,
+                model_name=model.name,
+                model_instance_name=model.instance,
+                channel=channel,
+            )
+
+            self.add_hist(
                 "hist_data_obs",
                 axes,
-                values=data_obs[start:stop],
+                values_data_obs,
+                variances=variances_data_obs,
                 label="observed number of events in data",
+                **opts,
             )
-            h_nobs = self.hist(
+            self.add_hist(
                 "hist_nobs",
                 axes,
-                values=nobs[start:stop],
+                values_nobs,
+                variances=variances_nobs,
                 label="observed number of events for fit",
+                **opts,
             )
-
-            for axes in self.projections.get(channel, []):
-                if len(axes) == 0:
-                    axes = ["yield"]
-                    h_data_proj = self.hist(
-                        "hist_data_obs",
-                        [
-                            hist.axis.Integer(
-                                0, 1, name="yield", overflow=False, underflow=False
-                            )
-                        ],
-                        values=np.sum(data_obs[start:stop]),
-                        label="observed number of events in data",
-                    )
-                    h_nobs_proj = self.hist(
-                        "hist_nobs",
-                        [
-                            hist.axis.Integer(
-                                0, 1, name="yield", overflow=False, underflow=False
-                            )
-                        ],
-                        values=np.sum(nobs[start:stop]),
-                        label="observed number of events for fit",
-                    )
-                else:
-                    h_data_proj = h_data_obs.project(*axes)
-                    h_nobs_proj = h_nobs.project(*axes)
-
-                self.dump_hist(h_data_proj, channel, axes)
-                self.dump_hist(h_nobs_proj, channel, axes)
-
-            self.dump_hist(h_data_obs, channel)
-            self.dump_hist(h_nobs, channel)
 
         return hists_data_obs, hists_nobs
 
@@ -336,14 +329,12 @@ class Workspace:
 
     def add_expected_hists(
         self,
-        channel_info,
+        model,
         exp,
         var=None,
         cov=None,
         impacts=None,
         impacts_grouped=None,
-        ndf=None,
-        chi2=None,
         process_axis=None,
         name=None,
         label=None,
@@ -360,22 +351,36 @@ class Workspace:
             axis_vars = hist.axis.StrCategory(self.parms, name="vars")
             var_axes = [axis_vars, axis_downUpVar]
 
-        for channel, info in channel_info.items():
+        for channel, info in model.channel_info.items():
             axes = info["axes"]
-            start = info["start"]
-            stop = info["stop"]
+            opts = dict(
+                start=info["start"],
+                stop=info["stop"],
+                label=label,
+                model_name=model.name,
+                model_instance_name=model.instance,
+                channel=channel,
+            )
 
             hist_axes = axes.copy()
+
+            if len(hist_axes) == 0:
+                hist_axes = [
+                    hist.axis.Integer(
+                        0, 1, name="yield", overflow=False, underflow=False
+                    )
+                ]
+                axes_names = ["yield"]
+
             if process_axis is not None:
                 hist_axes.append(process_axis)
 
             self.add_hist(
                 name,
                 [*hist_axes, *var_axes],
-                exp[start:stop],
-                var[start:stop] if var is not None else None,
-                label=label,
-                channel=channel,
+                exp,
+                var if var is not None else None,
+                **opts,
             )
 
             if impacts is not None:
@@ -383,9 +388,8 @@ class Workspace:
                 self.add_hist(
                     f"{name}_global_impacts",
                     [*hist_axes, axis_impacts],
-                    impacts[start:stop],
-                    label=label,
-                    channel=channel,
+                    impacts,
+                    **opts,
                 )
 
             if impacts_grouped is not None:
@@ -393,9 +397,8 @@ class Workspace:
                 self.add_hist(
                     f"{name}_global_impacts_grouped",
                     [*hist_axes, axis_impacts_grouped],
-                    impacts_grouped[start:stop],
-                    label=label,
-                    channel=channel,
+                    impacts_grouped,
+                    **opts,
                 )
 
         if cov is not None:
@@ -412,108 +415,11 @@ class Workspace:
                 [flat_axis_x, flat_axis_y],
                 cov,
                 label=f"{label} covariance",
+                model_name=model.name,
+                model_instance_name=model.instance,
             )
-
-        if chi2 is not None:
-            postfix = "_prefit" if prefit else "_postfit"
-            self.add_value(ndf, "ndf" + postfix)
-            self.add_value(chi2, "chi2" + postfix)
 
         return name, label
-
-    def add_expected_projection_hists(
-        self,
-        channel,
-        axes_names,
-        channel_axes,
-        exp,
-        var=None,
-        cov=None,
-        impacts=None,
-        impacts_grouped=None,
-        ndf=None,
-        chi2=None,
-        process_axis=None,
-        name=None,
-        label=None,
-        variations=False,
-        prefit=False,
-    ):
-        name, label = get_name_label_expected_hists(
-            name, label, prefit, variations, process_axis
-        )
-
-        hist_axes = [axis for axis in channel_axes if axis.name in axes_names]
-        if len(hist_axes) != len(axes_names):
-            raise ValueError("axis not found")
-
-        if len(hist_axes) == 0:
-            hist_axes = [
-                hist.axis.Integer(0, 1, name="yield", overflow=False, underflow=False)
-            ]
-            axes_names = ["yield"]
-
-        if process_axis is not None:
-            hist_axes.append(process_axis)
-
-        var_axes = []
-        if variations:
-            axis_vars = hist.axis.StrCategory(self.parms, name="vars")
-            var_axes = [axis_vars, axis_downUpVar]
-
-        self.add_hist(
-            name,
-            [*hist_axes, *var_axes],
-            exp,
-            var,
-            label=label,
-            channel=channel,
-            projection_axes=axes_names,
-        )
-
-        if cov is not None:
-            # flat axes for covariance matrix, since it can go across channels
-            flat_axis_x = hist.axis.Integer(
-                0, cov.shape[0], underflow=False, overflow=False, name="x"
-            )
-            flat_axis_y = hist.axis.Integer(
-                0, cov.shape[1], underflow=False, overflow=False, name="y"
-            )
-
-            self.add_hist(
-                f"{name}_cov",
-                [flat_axis_x, flat_axis_y],
-                cov,
-                label=f"{label} covariance",
-                channel=channel,
-                projection_axes=axes_names,
-            )
-
-        if impacts is not None:
-            axis_impacts = self.global_impact_axis
-            axis_impacts_grouped = self.grouped_impact_axis
-
-            self.add_hist(
-                f"{name}_global_impacts",
-                [*hist_axes, axis_impacts],
-                impacts,
-                label=f"{label} global impacts",
-                channel=channel,
-                projection_axes=axes_names,
-            )
-            self.add_hist(
-                f"{name}_global_impacts_grouped",
-                [*hist_axes, axis_impacts_grouped],
-                impacts_grouped,
-                label=f"{label} global impacts grouped",
-                channel=channel,
-                projection_axes=axes_names,
-            )
-
-        if chi2 is not None:
-            postfix = "_prefit" if prefit else ""
-            self.add_value(ndf, "ndf" + postfix, channel, axes_names)
-            self.add_value(chi2, "chi2" + postfix, channel, axes_names)
 
     def write_meta(self, meta):
         ioutils.pickle_dump_h5py("meta", meta, self.fout)

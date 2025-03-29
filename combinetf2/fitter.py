@@ -25,7 +25,6 @@ class Fitter:
         self.indata = indata
         self.binByBinStat = options.binByBinStat
         self.binByBinStatType = options.binByBinStatType
-        self.normalize = options.normalize
         self.systgroupsfull = self.indata.systgroups.tolist()
         self.systgroupsfull.append("stat")
         if self.binByBinStat:
@@ -97,6 +96,7 @@ class Fitter:
 
         # observed number of events per bin
         self.nobs = tf.Variable(self.indata.data_obs, trainable=False, name="nobs")
+        self.data_cov_inv = None
 
         if self.chisqFit:
             if self.externalCovariance:
@@ -834,15 +834,6 @@ class Fitter:
         else:
             normcentral = None
 
-        if self.normalize:
-            # FIXME this should be done per-channel ideally
-            nexpcentral = nexpcentral[:nbins]
-            normscale = tf.reduce_sum(self.nobs) / tf.reduce_sum(nexpcentral)
-
-            nexpcentral *= normscale
-            if compute_norm:
-                normcentral *= normscale
-
         return nexpcentral, normcentral
 
     def _compute_yields_with_beta(self, profile=True, compute_norm=False, full=True):
@@ -959,6 +950,7 @@ class Fitter:
 
     def expected_events(
         self,
+        model,
         inclusive=True,
         compute_variance=True,
         compute_cov=False,
@@ -969,7 +961,7 @@ class Fitter:
         compute_chi2=False,
     ):
 
-        def fun():
+        def flat_fun():
             return self._compute_yields(
                 inclusive=inclusive,
                 profile=profile,
@@ -980,9 +972,11 @@ class Fitter:
         ):
             raise NotImplementedError()
 
+        fun = model.make_fun(flat_fun, self.x, inclusive)
+
         aux = [None] * 4
         if compute_cov or compute_variance or compute_global_impacts:
-            exp, expvar, expcov, exp_impacts, exp_impacts_grouped = (
+            exp, exp_var, exp_cov, exp_impacts, exp_impacts_grouped = (
                 self.expected_with_variance(
                     fun,
                     profile=profile,
@@ -990,157 +984,32 @@ class Fitter:
                     compute_global_impacts=compute_global_impacts,
                 )
             )
-            aux = [expvar, expcov, exp_impacts, exp_impacts_grouped]
+            aux = [exp_var, exp_cov, exp_impacts, exp_impacts_grouped]
         elif compute_variations:
             exp = self.expected_variations(fun, correlations=correlated_variations)
         else:
             exp = tf.function(fun)()
 
         if compute_chi2:
+            data, data_var, data_cov = model.get_data(self.nobs, self.data_cov_inv)
 
-            def fun_residual():
-                return (
-                    self._compute_yields(
-                        inclusive=inclusive,
-                        profile=profile,
-                        full=False,
-                    )
-                    - self.nobs
+            # need to calculate prediction excluding masked channels
+            def flat_fun():
+                return self._compute_yields(
+                    inclusive=inclusive, profile=profile, full=False
                 )
 
-            if profile:
-                res, resvar, rescov, _1, _2 = self._expvar_profiled(
-                    fun_residual, compute_cov=True
-                )
-            else:
-                res, resvar, rescov, _1, _2 = self._expvar(
-                    fun_residual, compute_cov=True
-                )
-
-            chi2val = self.chi2(res, rescov).numpy()
-            ndf = tf.size(exp).numpy() - self.normalize
-
-            aux.append(self.chi2(res, rescov).numpy())  # chi2val
-            aux.append(tf.size(exp).numpy() - self.normalize)  # ndf
-        else:
-            aux.append(None)
-            aux.append(None)
-
-        return exp, aux
-
-    def expected_events_projection(
-        self,
-        channel,
-        axes,
-        inclusive=True,
-        compute_variance=True,
-        compute_cov=False,
-        compute_global_impacts=False,
-        compute_variations=False,
-        correlated_variations=False,
-        profile=True,
-        compute_chi2=False,
-        masked=False,
-    ):
-
-        def fun():
-            return self._compute_yields(
-                inclusive=inclusive,
+            pred, pred_var, pred_cov, _1, _2 = self.expected_with_variance(
+                model.make_fun(flat_fun, self.x, inclusive),
                 profile=profile,
-                full=masked,
+                compute_cov=True,
             )
 
-        info = self.indata.channel_info[channel]
-        start = info["start"]
-        stop = info["stop"]
+            chi2val = self.chi2(pred - data, pred_cov + data_cov).numpy()
+            ndf = tf.size(pred).numpy() - getattr(model, "normalize", False)
 
-        channel_axes = info["axes"]
-
-        exp_axes = channel_axes.copy()
-        hist_axes = [axis for axis in channel_axes if axis.name in axes]
-
-        if len(hist_axes) != len(axes):
-            raise ValueError(
-                f"Hist axes {[h.name for h in hist_axes]} != {axes} not found"
-            )
-
-        extra_axes = []
-        if not inclusive:
-            exp_axes.append(self.indata.axis_procs)
-            hist_axes.append(self.indata.axis_procs)
-            extra_axes.append(self.indata.axis_procs)
-
-        exp_shape = tuple([len(a) for a in exp_axes])
-
-        channel_axes_names = [axis.name for axis in channel_axes]
-        extra_axes_names = [axis.name for axis in extra_axes]
-
-        axis_idxs = [channel_axes_names.index(axis) for axis in axes]
-
-        proj_idxs = [i for i in range(len(channel_axes)) if i not in axis_idxs]
-
-        post_proj_axes_names = [
-            axis for axis in channel_axes_names if axis in axes
-        ] + extra_axes_names
-
-        transpose_idxs = [post_proj_axes_names.index(axis) for axis in axes] + [
-            post_proj_axes_names.index(axis) for axis in extra_axes_names
-        ]
-
-        def make_projection_fun(fun_flat):
-            def proj_fun():
-                exp = fun_flat()[start:stop]
-                exp = tf.reshape(exp, exp_shape)
-                exp = tf.reduce_sum(exp, axis=proj_idxs)
-                exp = tf.transpose(exp, perm=transpose_idxs)
-
-                return exp
-
-            return proj_fun
-
-        projection_fun = make_projection_fun(fun)
-
-        if compute_variations and (
-            compute_variance or compute_cov or compute_global_impacts
-        ):
-            raise NotImplementedError()
-
-        aux = [None] * 4
-        if compute_variance or compute_cov or compute_global_impacts:
-            exp, expvar, expcov, exp_impacts, exp_impacts_grouped = (
-                self.expected_with_variance(
-                    projection_fun,
-                    profile=profile,
-                    compute_cov=compute_cov,
-                    compute_global_impacts=compute_global_impacts,
-                )
-            )
-            aux = [expvar, expcov, exp_impacts, exp_impacts_grouped]
-        elif compute_variations:
-            exp = self.expected_variations(
-                projection_fun, correlations=correlated_variations
-            )
-        else:
-            exp = tf.function(projection_fun)()
-
-        if compute_chi2 and not masked:
-
-            def fun_residual():
-                return fun() - self.nobs
-
-            projection_fun_residual = make_projection_fun(fun_residual)
-
-            if profile:
-                res, resvar, rescov, _1, _2 = self._expvar_profiled(
-                    projection_fun_residual, compute_cov=True
-                )
-            else:
-                res, resvar, rescov, _1, _2 = self._expvar(
-                    projection_fun_residual, compute_cov=True
-                )
-
-            aux.append(self.chi2(res, rescov).numpy())  # chi2val
-            aux.append(tf.size(exp).numpy() - self.normalize)  # ndf
+            aux.append(chi2val)
+            aux.append(ndf)
         else:
             aux.append(None)
             aux.append(None)
@@ -1204,9 +1073,7 @@ class Fitter:
                 # mc stat contribution to the saturated likelihood is zero in this case
                 pass
 
-        ndof = (
-            tf.size(nobs) - self.npoi - self.indata.nsystnoconstraint - self.normalize
-        )
+        ndof = tf.size(nobs) - self.npoi - self.indata.nsystnoconstraint
 
         return lsaturated, ndof
 
