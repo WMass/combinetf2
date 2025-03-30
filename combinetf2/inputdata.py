@@ -2,6 +2,7 @@ import h5py
 import hist
 import numpy as np
 import tensorflow as tf
+from wums.ioutils import pickle_load_h5py
 
 from combinetf2.h5pyutils import makesparsetensor, maketensor
 
@@ -70,52 +71,9 @@ class FitInputData:
                 self.norm = maketensor(f["hnorm"])
                 self.logk = maketensor(f["hlogk"])
 
-            # infer some metadata from loaded information
-            self.dtype = self.data_obs.dtype
-            self.nbins = self.data_obs.shape[-1]
-            self.nbinsfull = self.norm.shape[0]
-            self.nbinsmasked = self.nbinsfull - self.nbins
-            self.nproc = len(self.procs)
-            self.nsyst = len(self.systs)
-            self.nsystnoprofile = len(self.systsnoprofile)
-            self.nsystnoconstraint = len(self.systsnoconstraint)
-            self.nsignals = len(self.signals)
-            self.nsystgroups = len(self.systgroups)
-            self.nnoigroups = len(self.noigroups)
-
             # reference meta data if available
-            self.metadata = {}
-            if "meta" in f.keys():
-                from wums.ioutils import pickle_load_h5py
-
-                self.metadata = pickle_load_h5py(f["meta"])
-                self.channel_info = self.metadata["channel_info"]
-            else:
-                self.channel_info = {
-                    "ch0": {
-                        "axes": [
-                            hist.axis.Integer(
-                                0,
-                                self.nbins,
-                                underflow=False,
-                                overflow=False,
-                                name="obs",
-                            )
-                        ]
-                    }
-                }
-                if self.nbinsmasked:
-                    self.channel_info["ch1_masked"] = {
-                        "axes": [
-                            hist.axis.Integer(
-                                0,
-                                self.nbinsmasked,
-                                underflow=False,
-                                overflow=False,
-                                name="masked",
-                            )
-                        ]
-                    }
+            self.metadata = pickle_load_h5py(f["meta"])
+            self.channel_info = self.metadata["channel_info"]
 
             self.symmetric_tensor = self.metadata.get("symmetric_tensor", False)
 
@@ -125,6 +83,33 @@ class FitInputData:
                 )
 
             self.systematic_type = self.metadata.get("systematic_type", "log_normal")
+
+            # infer some metadata from loaded information
+            self.dtype = self.data_obs.dtype
+            self.nbins = np.sum(
+                [
+                    np.prod([len(a) for a in info["axes"]])
+                    for info in self.channel_info.values()
+                    if not info["masked"]
+                ],
+                dtype=int,
+            )
+            self.nbinsmasked = np.sum(
+                [
+                    np.prod([len(a) for a in info["axes"]])
+                    for info in self.channel_info.values()
+                    if info["masked"]
+                ],
+                dtype=int,
+            )
+            self.nbinsfull = self.nbins + self.nbinsmasked
+            self.nproc = len(self.procs)
+            self.nsyst = len(self.systs)
+            self.nsystnoprofile = len(self.systsnoprofile)
+            self.nsystnoconstraint = len(self.systsnoconstraint)
+            self.nsignals = len(self.signals)
+            self.nsystgroups = len(self.systgroups)
+            self.nnoigroups = len(self.noigroups)
 
             # compute indices for channels
             ibin = 0

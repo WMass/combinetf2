@@ -70,13 +70,13 @@ source setup.sh
 
 An example can be found in ```tests/make_tensor.py -o test_tensor.hdf5```. 
 
-### Systematic uncertainties
-Systematic uncertainties are implemented by default using a log-normal probability density (with a multiplicative effect on the event yield).  Gaussian uncertainties with an additive effect on the event yield can also be used.  This is configured through the `systematic_type` parameter of the `TensorWriter`.
-
 ### Sparse tensor
 By setting `sparse=True` in the `TensorWriter` constructor the tensor is stored in the sparse representation. 
 This is useful when working with a sparse tensor, e.g. having many bins/processes/systematics where each bin/process/systematic only contributes to a small number of bins/processes/systematics. 
 This is often the case in the standard profile likelihood unfolding. 
+
+### Systematic uncertainties
+Systematic uncertainties are implemented by default using a log-normal probability density (with a multiplicative effect on the event yield). Gaussian uncertainties with an additive effect on the event yield can also be used. This is configured through the `systematic_type` parameter of the `TensorWriter`.
 
 ### Symmetrization
 By default, systematic variations are asymmetric. 
@@ -91,7 +91,7 @@ If a systematic variation is added by providing a single histogram, the variatio
 ### Masked channels
 Masked channels can be added that don't contribute to the likelihood but are evaluated as any other channel. 
 This is done by defining `masked=True` in the `tensorwriter` `add_channel` function. 
-(Pseudo) Data histograms for masked channels are not supported.
+(Pseudo) Data histograms for masked channels can be provided for convenience optionally but are not used anywhere in the fit.
 This is useful for example to compute unfolded (differential) cross sections and their uncertainties, including global impacts, taking into account all nuisance parameters that affect these channels.
 
 ## Run the fit

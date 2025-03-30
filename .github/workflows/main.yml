@@ -132,6 +132,10 @@ jobs:
         run: >-
           python tests/make_tensor.py -o $COMBINETF2_OUTDIR/ --symmetrizeAll --postfix symmetric 
 
+      - name: make fully symmetric tensor
+        run: >-
+          python tests/make_tensor.py -o $COMBINETF2_OUTDIR/ --symmetrizeAll --noSignal --systematicType normal --postfix linear 
+
       - name: make sparse tensor
         run: >-
           python tests/make_tensor.py -o $COMBINETF2_OUTDIR/ --sparse --postfix sparse
@@ -166,6 +170,12 @@ jobs:
         run: >- 
           combinetf2_fit.py $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/
           -t 0 --binByBinStat --doImpacts --globalImpacts --project ch1 a --project ch1 b --project ch0_masked
+          --saveHists --saveHistsPerProcess --computeHistErrors --computeHistCov --computeHistImpacts --computeVariations
+
+      - name: linear solution
+        run: >- 
+          combinetf2_fit.py $COMBINETF2_OUTDIR/test_tensor.hdf5 -o $COMBINETF2_OUTDIR/ --postfix linear
+          -t -1 0 --binByBinStat --binByBinStatType normal --chisqFit --doImpacts --globalImpacts
           --saveHists --saveHistsPerProcess --computeHistErrors --computeHistCov --computeHistImpacts --computeVariations
 
       - name: sparse tensor fit 

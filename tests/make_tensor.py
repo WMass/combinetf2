@@ -21,6 +21,18 @@ parser.add_argument(
     help="Make sparse tensor",
 )
 parser.add_argument(
+    "--noSignal",
+    default=False,
+    action="store_true",
+    help="Don't assign signal strength to signal process",
+)
+parser.add_argument(
+    "--systematicType",
+    default="log_normal",
+    choices=["log_normal", "normal"],
+    help="How variations are applied",
+)
+parser.add_argument(
     "--symmetrizeAll",
     default=False,
     action="store_true",
@@ -32,7 +44,6 @@ parser.add_argument(
     action="store_true",
     help="Skip adding masked channels",
 )
-
 
 args = parser.parse_args()
 
@@ -168,6 +179,7 @@ cov += np.diag(
 # Build tensor
 writer = tensorwriter.TensorWriter(
     sparse=args.sparse,
+    systematic_type=args.systematicType,
 )
 
 writer.add_channel(h1_data.axes, "ch0")
@@ -181,8 +193,8 @@ writer.add_pseudodata(h2_pseudo, "original", "ch1")
 
 writer.add_data_covariance(cov)
 
-writer.add_process(h1_sig, "sig", "ch0", signal=True)
-writer.add_process(h2_sig, "sig", "ch1", signal=True)
+writer.add_process(h1_sig, "sig", "ch0", signal=not args.noSignal)
+writer.add_process(h2_sig, "sig", "ch1", signal=not args.noSignal)
 
 writer.add_process(h1_bkg, "bkg", "ch0")
 writer.add_process(h2_bkg, "bkg", "ch1")
@@ -192,7 +204,7 @@ writer.add_process(h1_bkg_2, "bkg_2", "ch0")
 if not args.skipMaskedChannels:
     # add masked channel
     writer.add_channel(h1_sig_masked.axes, "ch0_masked", masked=True)
-    writer.add_process(h1_sig_masked, "sig", "ch0_masked", signal=True)
+    writer.add_process(h1_sig_masked, "sig", "ch0_masked", signal=not args.noSignal)
 
 # systematic uncertainties
 

@@ -96,7 +96,9 @@ class Fitter:
         self.x = tf.Variable(xdefault, trainable=True, name="x")
 
         # observed number of events per bin
-        self.nobs = tf.Variable(self.indata.data_obs, trainable=False, name="nobs")
+        self.nobs = tf.Variable(
+            self.indata.data_obs[: self.indata.nbins], trainable=False, name="nobs"
+        )
 
         if self.chisqFit:
             if self.externalCovariance:
@@ -129,11 +131,15 @@ class Fitter:
 
         # cache the constraint variance since it's used in several places
         # this is treated as a constant
+        n0 = self.expected_events_nominal()
         if self.binByBinStatType == "gamma":
-            self.varbeta = tf.stop_gradient(tf.math.reciprocal(self.indata.kstat))
+            self.varbeta = tf.stop_gradient(
+                tf.math.reciprocal(self.indata.kstat[: self.indata.nbins])
+            )
         elif self.binByBinStatType == "normal":
-            n0 = self.expected_events_nominal()
-            self.varbeta = tf.stop_gradient(n0**2 / self.indata.kstat)
+            self.varbeta = tf.stop_gradient(
+                n0**2 / self.indata.kstat[: self.indata.nbins]
+            )
 
             if self.binByBinStat and self.externalCovariance:
                 # precompute decomposition of composite matrix to speed up
@@ -142,9 +148,7 @@ class Fitter:
                     self.data_cov_inv + tf.diag(tf.reciprocal(self.varbeta))
                 )
 
-        self.nexpnom = tf.Variable(
-            self.expected_yield(), trainable=False, name="nexpnom"
-        )
+        self.nexpnom = tf.Variable(n0, trainable=False, name="nexpnom")
 
         # parameter covariance matrix
         self.cov = tf.Variable(
@@ -161,14 +165,20 @@ class Fitter:
             and self.indata.symmetric_tensor
             and self.indata.systematic_type == "normal"
             and self.npoi == 0
-            and ((not self.binByBinStat) or self.binByBinStatType == "normal")
+            and (not self.binByBinStat or self.binByBinStatType == "normal")
         )
 
     def _default_beta0(self):
         if self.binByBinStatType == "gamma":
-            return tf.ones_like(self.indata.kstat)
+            return tf.ones_like(self.indata.kstat[: self.indata.nbins])
         elif self.binByBinStatType == "normal":
-            return tf.zeros_like(self.indata.kstat)
+            return tf.zeros_like(self.indata.kstat[: self.indata.nbins])
+
+    def nobsassign(self, asimov=False):
+        if asimov:
+            self.nobs.assign(self.expected_events_nominal())
+        else:
+            self.nobs.assign(self.indata.data_obs[: self.indata.nbins])
 
     def prefit_covariance(self, unconstrained_err=0.0):
         # free parameters are taken to have zero uncertainty for the purposes of prefit uncertainties
@@ -642,8 +652,9 @@ class Fitter:
 
         expcov_noBBB = expcov
         if self.binByBinStat:
-            varbeta = self.varbeta
-            exp_cov_BBB = pdexpdbeta @ (varbeta[:, None] * tf.transpose(pdexpdbeta))
+            exp_cov_BBB = pdexpdbeta @ (
+                self.varbeta[:, None] * tf.transpose(pdexpdbeta)
+            )
             expcov += exp_cov_BBB
 
         if compute_global_impacts:
@@ -855,7 +866,6 @@ class Fitter:
 
                 nexp_profile = nexp[: self.indata.nbins]
                 kstat = self.indata.kstat[: self.indata.nbins]
-                beta0 = self.beta0[: self.indata.nbins]
                 # denominator in Gaussian likelihood is treated as a constant when computing
                 # global impacts for example
                 nobs0 = tf.stop_gradient(self.nobs)
@@ -876,17 +886,17 @@ class Fitter:
                                 self.betaauxlu,
                                 self.data_cov_inv
                                 @ ((self.nobs - nexp_profile)[:, None])
-                                + (beta0 / self.varbeta)[:, None],
+                                + (self.beta0 / self.varbeta)[:, None],
                             )
                             beta = tf.squeeze(beta, axis=-1)
                         else:
                             beta = (
                                 self.varbeta * (self.nobs - nexp_profile)
-                                + nobs0 * beta0
+                                + nobs0 * self.beta0
                             ) / (nobs0 + self.varbeta)
                 else:
                     if self.binByBinStatType == "gamma":
-                        beta = (self.nobs + kstat * beta0) / (nexp_profile + kstat)
+                        beta = (self.nobs + kstat * self.beta0) / (nexp_profile + kstat)
                     elif self.binByBinStatType == "normal":
                         bbeta = self.varbeta + nexp_profile - self.beta0
                         cbeta = (
@@ -894,13 +904,11 @@ class Fitter:
                             - nexp_profile * self.beta0
                         )
                         beta = 0.5 * (-bbeta + tf.sqrt(bbeta**2 - 4.0 * cbeta))
-
-                if full and self.indata.nbinsmasked:
-                    beta = tf.concat([beta, self.beta[self.indata.nbins :]], axis=0)
             else:
                 beta = self.beta
-                if (not full) and self.indata.nbinsmasked:
-                    beta = beta[: self.indata.nbins]
+
+            if full and self.indata.nbinsmasked:
+                beta = tf.concat([beta, self.indata.kstat[self.indata.nbins :]], axis=0)
 
             if self.binByBinStatType == "gamma":
                 nexp = nexp * beta
@@ -916,11 +924,11 @@ class Fitter:
 
     @tf.function
     def _profile_beta(self):
-        nexp, norm, beta = self._compute_yields_with_beta()
+        nexp, norm, beta = self._compute_yields_with_beta(full=False)
         self.beta.assign(beta)
 
     @tf.function
-    def expected_events_nominal(self):
+    def expected_events_nominal(self, full=False):
         rnorm = tf.ones(self.indata.nproc, dtype=self.indata.dtype)
         mrnorm = tf.expand_dims(rnorm, -1)
 
@@ -931,7 +939,10 @@ class Fitter:
             nexpfullcentral = tf.matmul(self.indata.norm, mrnorm)
             nexpfullcentral = tf.squeeze(nexpfullcentral, -1)
 
-        return nexpfullcentral
+        if full:
+            return nexpfullcentral
+        else:
+            return nexpfullcentral[: self.indata.nbins]
 
     def _compute_yields(self, inclusive=True, profile=True, full=True):
         nexpcentral, normcentral, beta = self._compute_yields_with_beta(
@@ -1180,32 +1191,32 @@ class Fitter:
     @tf.function
     def saturated_nll(self):
 
-        nobs = self.nobs
-
         if self.chisqFit:
             lsaturated = tf.zeros(shape=(), dtype=self.nobs.dtype)
         else:
-            nobsnull = tf.equal(nobs, tf.zeros_like(nobs))
+            nobsnull = tf.equal(self.nobs, tf.zeros_like(self.nobs))
 
             # saturated model
-            nobssafe = tf.where(nobsnull, tf.ones_like(nobs), nobs)
+            nobssafe = tf.where(nobsnull, tf.ones_like(self.nobs), self.nobs)
             lognobs = tf.math.log(nobssafe)
 
-            lsaturated = tf.reduce_sum(-nobs * lognobs + nobs, axis=-1)
+            lsaturated = tf.reduce_sum(-self.nobs * lognobs + self.nobs, axis=-1)
 
         if self.binByBinStat:
             if self.binByBinStatType == "gamma":
                 kstat = self.indata.kstat[: self.indata.nbins]
-                beta0 = self.beta0[: self.indata.nbins]
                 lsaturated += tf.reduce_sum(
-                    -kstat * beta0 * tf.math.log(beta0) + kstat * beta0
+                    -kstat * self.beta0 * tf.math.log(self.beta0) + kstat * self.beta0
                 )
             elif self.binByBinStatType == "normal":
                 # mc stat contribution to the saturated likelihood is zero in this case
                 pass
 
         ndof = (
-            tf.size(nobs) - self.npoi - self.indata.nsystnoconstraint - self.normalize
+            tf.size(self.nobs)
+            - self.npoi
+            - self.indata.nsystnoconstraint
+            - self.normalize
         )
 
         return lsaturated, ndof
@@ -1223,13 +1234,11 @@ class Fitter:
     def _compute_nll(self, profile=True):
         theta = self.x[self.npoi :]
 
-        nexpfullcentral, _, beta = self._compute_yields_with_beta(
+        nexp, _, beta = self._compute_yields_with_beta(
             profile=profile,
             compute_norm=False,
             full=False,
         )
-
-        nexp = nexpfullcentral
 
         if self.chisqFit:
             if self.externalCovariance:
@@ -1277,16 +1286,19 @@ class Fitter:
 
         if self.binByBinStat:
             kstat = self.indata.kstat[: self.indata.nbins]
-            beta0 = self.beta0[: self.indata.nbins]
             if self.binByBinStatType == "gamma":
-                lbetavfull = -kstat * beta0 * tf.math.log(beta) + kstat * beta
+                lbetavfull = (
+                    -kstat * self.beta0 * tf.math.log(self.beta) + kstat * self.beta
+                )
 
-                lbetav = -kstat * beta0 * tf.math.log(beta) + kstat * (beta - 1.0)
+                lbetav = -kstat * self.beta0 * tf.math.log(self.beta) + kstat * (
+                    self.beta - 1.0
+                )
 
                 lbetafull = tf.reduce_sum(lbetavfull)
                 lbeta = tf.reduce_sum(lbetav)
             elif self.binByBinStatType == "normal":
-                lbetavfull = 0.5 * (beta - beta0) ** 2 / self.varbeta
+                lbetavfull = 0.5 * (self.beta - self.beta0) ** 2 / self.varbeta
 
                 lbetafull = tf.reduce_sum(lbetavfull)
                 lbeta = lbetafull
