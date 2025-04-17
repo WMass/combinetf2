@@ -39,19 +39,6 @@ class PhysicsModel:
         return self.compute_flat(params, observables)
 
     # generic version which should not need to be overridden
-    def make_fun(self, fun_flat, params, inclusive=True):
-        compute = self.compute_flat if inclusive else self.compute_flat_per_process
-
-        def fun():
-            if self.need_observables:
-                exp = compute(params, fun_flat())
-            else:
-                exp = compute(params)
-            return exp
-
-        return fun
-
-    # generic version which should not need to be overridden
     @tf.function
     def get_data(self, data, data_cov_inv=None):
         with tf.GradientTape() as t:

@@ -18,7 +18,7 @@ def getImpactsAxes(indata):
 
 
 def getGlobalImpactsAxes(indata):
-    impact_names = list(indata.systs.astype(str)[indata.nsystnoconstraint :])
+    impact_names = list(indata.systs.astype(str))
     return hist.axis.StrCategory(impact_names, name="impacts")
 
 
