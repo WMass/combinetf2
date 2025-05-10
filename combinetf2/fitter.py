@@ -1,3 +1,6 @@
+import hashlib
+import re
+
 import numpy as np
 import scipy
 import tensorflow as tf
@@ -82,6 +85,19 @@ class Fitter:
             poidefault = tf.zeros([], dtype=self.indata.dtype)
         else:
             raise Exception("unsupported POIMode")
+
+        self._blinding_offsets_poi = tf.Variable(
+            tf.ones([self.npoi], dtype=self.indata.dtype),
+            trainable=False,
+            name="offset_poi",
+        )
+        self._blinding_offsets_theta = tf.Variable(
+            tf.zeros([self.indata.nsyst], dtype=self.indata.dtype),
+            trainable=False,
+            name="offset_theta",
+        )
+        if 0 in options.toys:
+            self.init_blinding_values(options.unblind)
 
         self.parms = np.concatenate([self.pois, self.indata.systs])
 
@@ -178,6 +194,92 @@ class Fitter:
             and ((not self.binByBinStat) or self.binByBinStatType == "normal")
         )
 
+    def init_blinding_values(self, unblind_parameter_expressions=[]):
+        def compile_patterns(patterns):
+            compiled = []
+            for p in patterns:
+                if p.startswith("r:"):
+                    # Treat as regex, remove prefix
+                    compiled.append(re.compile(p[2:]))
+                else:
+                    # Treat as exact string match
+                    compiled.append(re.compile(rf"^{re.escape(p)}$"))
+            return compiled
+
+        # Find parameters that match any regex
+        compiled_regexes = compile_patterns(unblind_parameter_expressions)
+        unblind_parameters = [
+            s
+            for s in [*self.indata.procs, *self.indata.noigroups]
+            if any(regex.search(s.decode()) for regex in compiled_regexes)
+        ]
+
+        # check if dataset is an integer (i.e. if it is real data or not) and use this to choose the random seed
+        is_dataobs_int = np.sum(
+            np.equal(self.indata.data_obs, np.floor(self.indata.data_obs))
+        )
+
+        def deterministic_random_from_string(s, mean=0.0, std=5.0):
+            # random value with seed taken based on string of parameter name
+            if isinstance(s, str):
+                s = s.encode("utf-8")
+
+            if is_dataobs_int:
+                s += b"_data"
+
+            # Hash the string
+            hash = hashlib.sha256(s).hexdigest()
+
+            seed_seq = np.random.SeedSequence(int(hash, 16))
+            rng = np.random.default_rng(seed_seq)
+
+            value = rng.normal(loc=mean, scale=std)
+            return value
+
+        # multiply offset to nois
+        self._blinding_values_theta = np.zeros(self.indata.nsyst, dtype=np.float64)
+        for i in self.indata.noigroupidxs:
+            param = self.indata.systs[i]
+            if param in unblind_parameters:
+                continue
+            logger.debug(f"Blind parameter {param}")
+            value = deterministic_random_from_string(param)
+            self._blinding_values_theta[i] = value
+
+        # add offset to pois
+        self._blinding_values_poi = np.ones(self.npoi, dtype=np.float64)
+        for i in range(self.npoi):
+            param = self.indata.signals[i]
+            if param in unblind_parameters:
+                continue
+            logger.debug(f"Blind signal strength modifier for {param}")
+            value = deterministic_random_from_string(param)
+            self._blinding_values_poi[i] = np.exp(value)
+
+    def set_blinding_offsets(self, blind=True):
+        if blind:
+            self._blinding_offsets_poi.assign(self._blinding_values_poi)
+            self._blinding_offsets_theta.assign(self._blinding_values_theta)
+        else:
+            self._blinding_offsets_poi.assign(np.ones(self.npoi, dtype=np.float64))
+            self._blinding_offsets_theta.assign(
+                np.zeros(self.indata.nsyst, dtype=np.float64)
+            )
+
+    def get_blinded_theta(self):
+        theta = self.x[self.npoi :]
+        theta = theta + self._blinding_offsets_theta
+        return theta
+
+    def get_blinded_poi(self):
+        xpoi = self.x[: self.npoi]
+        if self.allowNegativePOI:
+            poi = xpoi
+        else:
+            poi = tf.square(xpoi)
+        poi = poi * self._blinding_offsets_poi
+        return poi
+
     def _default_beta0(self):
         if self.binByBinStatType == "gamma":
             return tf.ones_like(self.indata.sumw)
@@ -233,6 +335,7 @@ class Fitter:
             self.beta0defaultassign()
             self.betadefaultassign()
         self.xdefaultassign()
+        self.set_blinding_offsets(False)
 
     def bayesassign(self):
         # FIXME use theta0 as the mean and constraintweight to scale the width
@@ -857,13 +960,8 @@ class Fitter:
     def _compute_yields_noBBB(self, compute_norm=False, full=True):
         # compute_norm: compute yields for each process, otherwise inclusive
         # full: compute yields inclduing masked channels
-        xpoi = self.x[: self.npoi]
-        theta = self.x[self.npoi :]
-
-        if self.allowNegativePOI:
-            poi = xpoi
-        else:
-            poi = tf.square(xpoi)
+        poi = self.get_blinded_poi()
+        theta = self.get_blinded_theta()
 
         rnorm = tf.concat(
             [poi, tf.ones([self.indata.nproc - poi.shape[0]], dtype=self.indata.dtype)],
@@ -1305,7 +1403,7 @@ class Fitter:
 
     def _compute_lc(self):
         # constraints
-        theta = self.x[self.npoi :]
+        theta = self.get_blinded_theta()
         lc = tf.reduce_sum(
             self.indata.constraintweights * 0.5 * tf.square(theta - self.theta0)
         )
@@ -1473,7 +1571,6 @@ class Fitter:
         return val, grad, hess
 
     def minimize(self):
-
         if self.is_linear:
             logger.info(
                 "Likelihood is purely quadratic, solving by Cholesky decomposition instead of iterative fit"

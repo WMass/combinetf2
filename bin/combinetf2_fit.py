@@ -287,6 +287,13 @@ def make_parser():
         type=float,
         help="Assumed prefit uncertainty for unconstrained nuisances",
     )
+    parser.add_argument(
+        "--unblind",
+        type=str,
+        default=[],
+        nargs="*",
+        help="Specify list of parameters or regex (leading by 'r:') to unblind matching parameters of interest. E.g. 'r:.*' to unblind all.",
+    )
 
     return parser.parse_args()
 
@@ -599,6 +606,7 @@ def main():
                 ifitter.nobs.assign(ifitter.expected_yield())
             if ifit == 0:
                 ifitter.nobs.assign(ifitter.indata.data_obs)
+
             elif ifit >= 1:
                 group += f"_toy{ifit}"
                 ifitter.toyassign(
@@ -619,6 +627,7 @@ def main():
                 save_hists(args, models, ifitter, ws, prefit=True)
             prefit_time.append(time.time())
 
+            ifitter.set_blinding_offsets(ifit == 0)
             fit(args, ifitter, ws, dofit=ifit >= 0)
             fit_time.append(time.time())
 

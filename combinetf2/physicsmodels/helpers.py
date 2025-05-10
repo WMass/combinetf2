@@ -155,10 +155,10 @@ class Term:
         h = hist.Hist(*channel_axes)
         if self.selections:
             for k, s in selections.items():
-                if s.step is None:
-                    h = h[{k: s}]
-                else:
+                if isinstance(s, slice) and s.step is not None:
                     h = h[{k: slice(s.start, s.stop, hist.rebin(s.step))}]
+                else:
+                    h = h[{k: s}]
 
         self.segment_ids = {}
         self.num_segments = {}
