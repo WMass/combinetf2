@@ -195,23 +195,15 @@ class Fitter:
         )
 
     def init_blinding_values(self, unblind_parameter_expressions=[]):
-        def compile_patterns(patterns):
-            compiled = []
-            for p in patterns:
-                if p.startswith("r:"):
-                    # Treat as regex, remove prefix
-                    compiled.append(re.compile(p[2:]))
-                else:
-                    # Treat as exact string match
-                    compiled.append(re.compile(rf"^{re.escape(p)}$"))
-            return compiled
-
         # Find parameters that match any regex
-        compiled_regexes = compile_patterns(unblind_parameter_expressions)
+        compiled_expressions = [
+            re.compile(expr) for expr in unblind_parameter_expressions
+        ]
+
         unblind_parameters = [
             s
-            for s in [*self.indata.procs, *self.indata.noigroups]
-            if any(regex.search(s.decode()) for regex in compiled_regexes)
+            for s in [*self.indata.signals, *self.indata.noigroups]
+            if any(regex.match(s.decode()) for regex in compiled_expressions)
         ]
 
         # check if dataset is an integer (i.e. if it is real data or not) and use this to choose the random seed
