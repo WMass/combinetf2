@@ -555,10 +555,6 @@ def main():
     indata = inputdata.FitInputData(args.filename, args.pseudoData)
     ifitter = fitter.Fitter(indata, args)
 
-    # physics models for observables and transformations
-    if len(args.physicsModel) == 0:
-        # if no model is explicitly added, fall back to Basemodel
-        args.physicsModel = [["Basemodel"]]
     models = []
     for margs in args.physicsModel:
         model = ph.instance_from_class(margs[0], indata, *margs[1:])

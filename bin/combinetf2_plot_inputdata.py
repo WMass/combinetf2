@@ -71,7 +71,13 @@ def parseArgs():
         help="List of hists to plot; dash separated for unrolled hists",
     )
     parser.add_argument(
-        "--normToData", action="store_true", help="Normalize MC to data"
+        "--normToData", action="store_true", help="Normalize MC to data", default=False
+    )
+    parser.add_argument(
+        "--pseuodata",
+        type=str,
+        default=None,
+        help="Pseuododata name to plot instead of data.",
     )
     parser.add_argument(
         "--dataName", type=str, default="Data", help="Data name for plot labeling"
@@ -594,7 +600,7 @@ def main():
     global logger
     logger = logging.setup_logger(__file__, args.verbose, args.noColorLogger)
 
-    indata = inputdata.FitInputData(args.infile)
+    indata = inputdata.FitInputData(args.infile, pseudodata=args.pseuodata)
 
     debug = debugdata.FitDebugData(indata)
 
