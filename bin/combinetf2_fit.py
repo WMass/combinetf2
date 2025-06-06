@@ -464,16 +464,17 @@ def fit(args, fitter, ws, dofit=True):
                 ws.add_global_impacts_hists(*fitter.global_impacts_parms())
 
     nllvalfull = fitter.full_nll().numpy()
-    satnllvalfull, ndfsat = fitter.saturated_nll()
+    nllvalreduced = fitter.reduced_nll().numpy()
 
-    satnllvalfull = satnllvalfull.numpy()
-    ndfsat = ndfsat.numpy()
+    ndfsat = (
+        tf.size(fitter.nobs) - fitter.npoi - fitter.indata.nsystnoconstraint
+    ).numpy()
 
     ws.results.update(
         {
             "nllvalfull": nllvalfull,
+            "nllvalreduced": nllvalreduced,
             "edmval": edmval,
-            "satnllvalfull": satnllvalfull,
             "ndfsat": ndfsat,
             "postfit_profile": args.externalPostfit is None,
         }
