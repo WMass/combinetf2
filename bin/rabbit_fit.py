@@ -564,8 +564,14 @@ def main():
     global logger
     logger = logging.setup_logger(__file__, args.verbose, args.noColorLogger)
 
+    # make list of fits with -1: asimov; 0: fit to data; >=1: toy
+    fits = np.concatenate(
+        [np.array([x]) if x <= 0 else 1 + np.arange(x, dtype=int) for x in args.toys]
+    )
+    blinded_fits = [f == 0 or (f > 0 and args.toysDataMode == "observed") for f in fits]
+
     indata = inputdata.FitInputData(args.filename, args.pseudoData)
-    ifitter = fitter.Fitter(indata, args)
+    ifitter = fitter.Fitter(indata, args, do_blinding=any(blinded_fits))
 
     # physics models for observables and transformations
     if len(args.physicsModel) == 0 and args.saveHists:
@@ -597,19 +603,11 @@ def main():
 
         ws.write_meta(meta=meta)
 
-        # make list of fits with -1: asimov; 0: fit to data; >=1: toy
-        fits = np.concatenate(
-            [
-                np.array([x]) if x <= 0 else 1 + np.arange(x, dtype=int)
-                for x in args.toys
-            ]
-        )
-
         init_time = time.time()
         prefit_time = []
         postfit_time = []
         fit_time = []
-        for ifit in fits:
+        for i, ifit in enumerate(fits):
             ifitter.defaultassign()
 
             group = "results"
@@ -639,7 +637,7 @@ def main():
                 save_hists(args, models, ifitter, ws, prefit=True)
             prefit_time.append(time.time())
 
-            ifitter.set_blinding_offsets(ifit == 0)
+            ifitter.set_blinding_offsets(blind=blinded_fits[i])
             fit(args, ifitter, ws, dofit=ifit >= 0)
             fit_time.append(time.time())
 

@@ -7,7 +7,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from wums import logging
 
-from combinetf2 import tfhelpers as tfh
+from rabbit import tfhelpers as tfh
 
 logger = logging.child_logger(__name__)
 
@@ -26,7 +26,7 @@ class FitterCallback:
 
 
 class Fitter:
-    def __init__(self, indata, options):
+    def __init__(self, indata, options, do_blinding=False):
         self.indata = indata
         self.binByBinStat = not options.noBinByBinStat
         self.systgroupsfull = self.indata.systgroups.tolist()
@@ -88,17 +88,18 @@ class Fitter:
         else:
             raise Exception("unsupported POIMode")
 
-        self._blinding_offsets_poi = tf.Variable(
-            tf.ones([self.npoi], dtype=self.indata.dtype),
-            trainable=False,
-            name="offset_poi",
-        )
-        self._blinding_offsets_theta = tf.Variable(
-            tf.zeros([self.indata.nsyst], dtype=self.indata.dtype),
-            trainable=False,
-            name="offset_theta",
-        )
-        if 0 in options.toys:
+        self.do_blinding = do_blinding
+        if self.do_blinding:
+            self._blinding_offsets_poi = tf.Variable(
+                tf.ones([self.npoi], dtype=self.indata.dtype),
+                trainable=False,
+                name="offset_poi",
+            )
+            self._blinding_offsets_theta = tf.Variable(
+                tf.zeros([self.indata.nsyst], dtype=self.indata.dtype),
+                trainable=False,
+                name="offset_theta",
+            )
             self.init_blinding_values(options.unblind)
 
         self.parms = np.concatenate([self.pois, self.indata.systs])
@@ -204,7 +205,10 @@ class Fitter:
 
         unblind_parameters = [
             s
-            for s in [*self.indata.signals, *self.indata.noigroups]
+            for s in [
+                *self.indata.signals,
+                *[self.indata.systs[i] for i in self.indata.noigroupidxs],
+            ]
             if any(regex.match(s.decode()) for regex in compiled_expressions)
         ]
 
@@ -262,8 +266,10 @@ class Fitter:
 
     def get_blinded_theta(self):
         theta = self.x[self.npoi :]
-        theta = theta + self._blinding_offsets_theta
-        return theta
+        if self.do_blinding:
+            return theta + self._blinding_offsets_theta
+        else:
+            return theta
 
     def get_blinded_poi(self):
         xpoi = self.x[: self.npoi]
@@ -271,8 +277,10 @@ class Fitter:
             poi = xpoi
         else:
             poi = tf.square(xpoi)
-        poi = poi * self._blinding_offsets_poi
-        return poi
+        if self.do_blinding:
+            return poi * self._blinding_offsets_poi
+        else:
+            return poi
 
     def _default_beta0(self):
         if self.binByBinStatType == "gamma":
