@@ -345,7 +345,12 @@ def parseArgs():
         action="store_true",
         help="Plot an uncertainty band in the upper panel around the prediction",
     )
-
+    parser.add_argument(
+        "--uncertaintyLabel",
+        type=str,
+        default=None,
+        help="Label for uncertainty shown in the (ratio) plot",
+    )
     args = parser.parse_args()
 
     return args
@@ -393,7 +398,9 @@ def make_plot(
             r"$Events\,/\,GeV$" if not args.unfoldedXsec else r"$d\sigma (pb\,/\,GeV)$"
         )
     else:
-        ylabel = r"$Events\,/\,unit$" if not args.unfoldedXsec else r"$d\sigma (pb)$"
+        ylabel = r"$Normalized\ units$" if is_normalized else r"$Events\,/\,unit$"
+        if args.unfoldedXsec:
+            ylabel = r"$d\sigma (pb)$"
 
     if args.ylabel is not None:
         ylabel = args.ylabel
@@ -673,12 +680,16 @@ def make_plot(
     if ratio or diff:
         extra_handles = []
         extra_labels = []
+        if is_normalized:
+            cutoff = 0.5 * np.stack((h_data.values(), h_inclusive.values())).min()
+        else:
+            cutoff = 0.01
         if diff:
             h1 = hh.addHists(h_inclusive, h_inclusive, scale2=-1)
             h2 = hh.addHists(h_data, h_inclusive, scale2=-1)
             if h_data_stat is not None:
                 h2_stat = hh.divideHists(
-                    h_data_stat, h_inclusive, cutoff=0.01, rel_unc=True
+                    h_data_stat, h_inclusive, cutoff=cutoff, rel_unc=True
                 )
         else:
             h1 = hh.divideHists(
@@ -689,10 +700,10 @@ def make_plot(
                 flow=False,
                 by_ax_name=False,
             )
-            h2 = hh.divideHists(h_data, h_inclusive, cutoff=0.01, rel_unc=True)
+            h2 = hh.divideHists(h_data, h_inclusive, cutoff=cutoff, rel_unc=True)
             if h_data_stat is not None:
                 h2_stat = hh.divideHists(
-                    h_data_stat, h_inclusive, cutoff=0.01, rel_unc=True
+                    h_data_stat, h_inclusive, cutoff=cutoff, rel_unc=True
                 )
 
         hep.histplot(
@@ -745,7 +756,12 @@ def make_plot(
             hatchstyle = None
             facecolor = "silver"
             # label_unc = "Pred. unc."
-            label_unc = "Model unc." if not args.unfoldedXsec else "Prefit unc."
+            default_unc_label = (
+                "Normalized model unc." if is_normalized else "Model unc."
+            )
+            label_unc = default_unc_label if not args.unfoldedXsec else "Prefit unc."
+            if args.uncertaintyLabel:
+                label_unc = args.uncertaintyLabel
 
             if diff:
                 ax2.fill_between(
@@ -799,6 +815,7 @@ def make_plot(
                         linewidth=0.0,
                         label=label_unc,
                     )
+
         if (
             args.showVariations in ["lower", "both"]
             and hup is not None
@@ -830,7 +847,7 @@ def make_plot(
                     op = lambda h, hI=h_inclusive: hh.addHists(h, hI, scale2=-1)
                 else:
                     op = lambda h, hI=h_inclusive: hh.divideHists(
-                        h, hI, cutoff=0.01, rel_unc=True
+                        h, hI, cutoff=cutoff, rel_unc=True
                     )
 
                 if varOneSided[i]:
@@ -1282,7 +1299,7 @@ def main():
         for instance_key in instance_keys:
 
             is_normalized = any(
-                instance_key.startswith(x) for x in ["Normalized", "Normratio"]
+                instance_key.startswith(x) for x in ["Normalize", "Normratio"]
             )
 
             instance = results[instance_key]
