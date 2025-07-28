@@ -51,7 +51,7 @@ class TensorWriter:
         self.data_covariance = None
         self.dict_pseudodata = {}  # [channel][pseudodata]
         self.dict_norm = {}  # [channel][process]
-        self.dict_sumw2 = {}  # [channel]
+        self.dict_sumw2 = {}  # [channel][process]
         self.dict_logkavg = {}  # [channel][proc][syst]
         self.dict_logkhalfdiff = {}  # [channel][proc][syst]
         self.dict_logkavg_indices = {}
@@ -81,6 +81,10 @@ class TensorWriter:
             variances = h.variances(flow=flow)
         else:
             variances = h
+
+        if (variances < 0.0).any():
+            raise ValueError("Negative variances encountered")
+
         return variances.flatten().astype(self.dtype)
 
     def add_data(self, h, channel="ch0"):
@@ -140,7 +144,7 @@ class TensorWriter:
             )
 
         self.dict_norm[channel][name] = norm
-        self.dict_sumw2[channel] += sumw2
+        self.dict_sumw2[channel][name] = sumw2
 
     def add_channel(self, axes, name=None, masked=False, flow=False):
         if flow and masked is False:
@@ -153,7 +157,7 @@ class TensorWriter:
         ibins = np.prod([a.extent if flow else a.size for a in axes])
         self.nbinschan[name] = ibins
         self.dict_norm[name] = {}
-        self.dict_sumw2[name] = np.zeros(ibins)
+        self.dict_sumw2[name] = {}
 
         # add masked channels last and not masked channels first
         this_channel = {"axes": [a for a in axes], "masked": masked, "flow": flow}
@@ -499,21 +503,20 @@ class TensorWriter:
         nbinsfull = sum([v for v in self.nbinschan.values()])
 
         logger.info(f"Write out nominal arrays")
-        sumw = np.zeros([nbinsfull], self.dtype)
-        sumw2 = np.zeros([nbinsfull], self.dtype)
+        sumw = np.zeros([nbinsfull, nproc], self.dtype)
+        sumw2 = np.zeros([nbinsfull, nproc], self.dtype)
         data_obs = np.zeros([nbins], self.dtype)
         pseudodata = np.zeros([nbins, len(self.pseudodata_names)], self.dtype)
         ibin = 0
         for chan, chan_info in self.channels.items():
             nbinschan = self.nbinschan[chan]
 
-            sumw2[ibin : ibin + nbinschan] = self.dict_sumw2[chan]
-
             for iproc, proc in enumerate(procs):
                 if proc not in self.dict_norm[chan]:
                     continue
 
-                sumw[ibin : ibin + nbinschan] += self.dict_norm[chan][proc]
+                sumw[ibin : ibin + nbinschan, iproc] = self.dict_norm[chan][proc]
+                sumw2[ibin : ibin + nbinschan, iproc] = self.dict_sumw2[chan][proc]
 
             if not chan_info["masked"]:
                 data_obs[ibin : ibin + nbinschan] = self.dict_data_obs[chan]
