@@ -136,6 +136,10 @@ jobs:
         run: >-
           python tests/make_tensor.py -o $RABBIT_OUTDIR/ --sparse --postfix sparse
 
+      - name: make boost tensor
+        run: >-
+          python tests/make_tensor.py -o $RABBIT_OUTDIR/ --histType boost --postfix boost
+
       - name: debug input
         run: debug_inputdata.py $RABBIT_OUTDIR//test_tensor.hdf5
 

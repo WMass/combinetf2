@@ -1,6 +1,5 @@
 import argparse
 
-import hist
 import numpy as np
 
 from rabbit import tensorwriter
@@ -38,31 +37,114 @@ parser.add_argument(
     default="log_normal",
     help="probability density for systematic variations",
 )
-
+parser.add_argument(
+    "--histType",
+    choices=["hist", "boost", "root"],
+    default="hist",
+    help="Type of input histogram",
+)
 args = parser.parse_args()
 
-# Make histograms
-ax_x = hist.axis.Regular(10, -5, 5, name="x")
-ax_a = hist.axis.Regular(10, 0, 5, name="a")
-ax_b = hist.axis.Variable([0, 1, 3, 6, 10, 20], name="b")
+# Make histograms using different interfaces
+if args.histType == "hist":
+    import hist
 
-h1_data = hist.Hist(ax_x, storage=hist.storage.Double())
-h2_data = hist.Hist(ax_a, ax_b, storage=hist.storage.Double())
+    def Axis(*bins, axis_type="Regular", name="h1"):
+        a = getattr(hist.axis, axis_type)(*bins, name=name)
+        return a
 
-h1_sig = hist.Hist(ax_x, storage=hist.storage.Weight())
-h2_sig = hist.Hist(ax_a, ax_b, storage=hist.storage.Weight())
+    def Histogram(*axes, weighted=False):
 
-h1_bkg = hist.Hist(ax_x, storage=hist.storage.Weight())
-h2_bkg = hist.Hist(ax_a, ax_b, storage=hist.storage.Weight())
+        h = hist.Hist(
+            *axes, storage=hist.storage.Weight() if weighted else hist.storage.Double()
+        )
+        return h
 
-h1_bkg_2 = hist.Hist(ax_x, storage=hist.storage.Weight())
+    def fill(h, *values, weight=None):
+        if weight is not None:
+            h.fill(*values, weight=weight)
+        else:
+            h.fill(*values)
+
+elif args.histType == "boost":
+    import boost_histogram as bh
+
+    def Axis(*bins, axis_type="Regular", name=None):
+        a = getattr(bh.axis, axis_type)(*bins)
+        return a
+
+    def Histogram(*axes, weighted=False):
+
+        h = bh.Histogram(
+            *axes, storage=bh.storage.Weight() if weighted else bh.storage.Double()
+        )
+        return h
+
+    def fill(h, *values, weight=None):
+        if weight is not None:
+            h.fill(*values, weight=weight)
+        else:
+            h.fill(*values)
+
+elif args.histType == "root":
+    from array import array
+
+    import ROOT
+
+    def Axis(*bins, axis_type="Regular", name=None):
+        return bins
+
+    def Histogram(*axes, name="h2", title="Hist 1D", weighted=False):
+
+        # format regular or variable axes
+        axs = [
+            (len(a[0]) - 1, array("d", a[0])) if isinstance(a[0], list) else a
+            for a in axes
+        ]
+
+        if len(axes) == 1:
+            h = ROOT.TH1D(name, title, *axs[0])
+
+        elif len(axes) == 2:
+            h = ROOT.TH2D(name, title, *axs[0], *axs[1])
+
+        return h
+
+    def fill(h, *values, weight=None):
+        n = len(values[0])
+        vals = [array("d", v) for v in values]
+        if weight is not None:
+            wgt = array("d", weight)
+        else:
+            wgt = array("d", [1.0] * n)
+        h.FillN(n, *vals, wgt)
+
+
+bins_x = [10, -5, 5]
+bins_a = [10, 0, 5]
+bins_b = [0, 1, 3, 6, 10, 20]
+
+ax_x = Axis(*bins_x, axis_type="Regular", name="x")
+ax_a = Axis(*bins_a, axis_type="Regular", name="a")
+ax_b = Axis(bins_b, axis_type="Variable", name="b")
+
+h1_data = Histogram(ax_x)
+h2_data = Histogram(ax_a, ax_b)
+
+h1_sig = Histogram(ax_x, weighted=True)
+h2_sig = Histogram(ax_a, ax_b, weighted=True)
+
+h1_bkg = Histogram(ax_x, weighted=True)
+h2_bkg = Histogram(ax_a, ax_b, weighted=True)
+
+h1_bkg_2 = Histogram(ax_x, weighted=True)
 
 # masked channel e.g. for gen level distribution
-h1_sig_masked = hist.Hist(ax_x, storage=hist.storage.Weight())
+h1_sig_masked = Histogram(ax_x, weighted=True)
 
 # for pseudodata
-h1_pseudo = hist.Hist(ax_x, storage=hist.storage.Weight())
-h2_pseudo = hist.Hist(ax_a, ax_b, storage=hist.storage.Weight())
+h1_pseudo = Histogram(ax_x, weighted=True)
+h2_pseudo = Histogram(ax_a, ax_b, weighted=True)
 
 # Generate random data for filling
 np.random.seed(42)  # For reproducibility
@@ -105,36 +187,37 @@ def get_bkg_2():
 
 # Fill histograms
 x, w_x, a, b, w_ab = get_sig()
-h1_data.fill(x)
-h2_data.fill(a, b)
+fill(h1_data, x)
+fill(h2_data, a, b)
 
 x, w_x, a, b, w_ab = get_bkg()
-h1_data.fill(x)
-h2_data.fill(a, b)
+fill(h1_data, x)
+fill(h2_data, a, b)
 
 x = get_bkg_2()
-h1_data.fill(x)
+fill(h1_data, x)
 
 x, w_x, a, b, w_ab = get_sig(3)
-h1_sig.fill(x, weight=w_x)
-h2_sig.fill(a, b, weight=w_ab)
+fill(h1_sig, x, weight=w_x)
+fill(h2_sig, a, b, weight=w_ab)
 
 x, w_x, a, b, w_ab = get_bkg(2)
-h1_bkg.fill(x, weight=w_x)
-h2_bkg.fill(a, b, weight=w_ab)
+fill(h1_bkg, x, weight=w_x)
+fill(h2_bkg, a, b, weight=w_ab)
 
 x = get_bkg_2()
-h1_bkg_2.fill(x)
+fill(h1_bkg_2, x)
 
 if not args.skipMaskedChannels:
     x, w_x = get_sig_masked(3)
-    h1_sig_masked.fill(x, weight=w_x)
+    fill(h1_sig_masked, x, weight=w_x)
 
 # pseudodata as exact composition of signal and background
 h1_pseudo.values()[...] = (
     h1_sig.values() + h1_bkg.values()[...] + h1_bkg_2.values()[...]
 )
 h2_pseudo.values()[...] = h2_sig.values() + h2_bkg.values()[...]
+
 h1_pseudo.variances()[...] = (
     h1_sig.variances() + h1_bkg.variances()[...] + h1_bkg_2.variances()[...]
 )
